@@ -11,42 +11,37 @@ export function StepOffer({ data, onNext, onBack, isPaused }) {
   const [decision, setDecision] = useState(data.steps.offer?.decision || "");
   const [concerns, setConcerns] = useState(data.steps.offer?.concerns || "");
   const [submitting, setSubmitting] = useState(false);
+  const salary =
+    data?.seed?.compensation?.salary ||
+    data?.seed?.salary ||
+    "";
 
   const handleSubmit = async () => {
     setSubmitting(true);
-    let nextStatus = data.status;
-    let nextStep = 2; // Default proceed
+    try {
+      if (decision === "concern") {
+        await api.setStatus("ON_HOLD_HR");
+        await api.submitStep("offer", { decision, concerns }, 2);
+        onNext("offer", { decision, concerns }, 2);
+        return;
+      }
 
-    if (decision === "decline") {
-      // Terminal UI handled locally or state update
-      // We'll proceed to next step but status will block further progress ideally?
-      // Or just remain here with a message?
-      // "If Decline -> show terminal UI message... Disable Next"
-      // Let's updated state to local "declined" view or set status.
-      // But prompt says "Disable Next". So we likely don't move to step 2.
-    } else if (decision === "concern") {
-      nextStatus = "NEGOTIATION_PENDING";
-      // "show the pause banner (disable Next); but allow Back and viewing other steps."
-      // So we technically stay on this step or allow browsing? 
-      // "Viewing other steps" implies we might not enforce strictly linear if passed?
-      // But we are at Step 1.
-      // We should save this state.
+      if (decision === "decline") {
+        await api.setStatus("DECLINED");
+        await api.submitStep("offer", { decision, concerns }, null);
+        return;
+      }
+
+      // Accept offer
+      await api.submitStep("offer", { decision, concerns }, 2);
+      onNext("offer", { decision, concerns }, 2);
+    } finally {
+      setSubmitting(false);
     }
-
-    // Call Mock API directly for status update if needed, mockApi.submitStep handles payload.
-    // Special handling involves `setStatus` likely.
-
-    if (decision === "concern") {
-       await api.setStatus("NEGOTIATION_PENDING");
-    }
-
-    // Save step data
-    onNext("offer", { decision, concerns }, decision === 'decline' ? 1 : (decision === 'concern' ? 1 : 2));
-    setSubmitting(false);
   };
 
   // Terminal state for Decline
-  if (decision === "decline" && data.steps.offer?.decision === "decline") { // If saved as decline
+  if (decision === "decline" && data.status === "DECLINED") { // If saved as decline
      return (
         <Card className="shadow-md border-red-100 mt-10">
             <CardHeader className="text-center">
@@ -66,6 +61,12 @@ export function StepOffer({ data, onNext, onBack, isPaused }) {
         <CardDescription>Please review your offer details and indicate your decision.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
+        {salary && (
+          <div className="text-sm text-gray-600">
+            Offered Salary: <span className="font-medium text-gray-900">{salary}</span>
+          </div>
+        )}
+
         <div className="space-y-3">
           <Label>Decision</Label>
           <RadioGroup value={decision} onValueChange={setDecision} disabled={isPaused}>
@@ -98,9 +99,9 @@ export function StepOffer({ data, onNext, onBack, isPaused }) {
         )}
         
         {decision === "decline" && (
-            <div className="p-3 bg-red-50 text-red-800 text-sm rounded-md">
-                Declining the offer will notify HR and end this onboarding session.
-            </div>
+          <div className="p-3 bg-red-50 text-red-800 text-sm rounded-md">
+            You have declined the offer. HR will contact you.
+          </div>
         )}
 
       </CardContent>

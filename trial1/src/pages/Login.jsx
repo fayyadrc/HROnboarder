@@ -21,8 +21,10 @@ export function LoginPage() {
     setError(null);
 
     try {
-      await api.login(appNumber);
-      navigate("/onboarding");
+      const caseData = await api.login(appNumber);
+      if (caseData?.caseId) {
+        navigate("/onboarding");
+      }
     } catch (err) {
       console.error(err);
       setError("Failed to validate application number. Please try again.");
@@ -32,42 +34,52 @@ export function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
-      <Card className="w-full max-w-md shadow-lg border-gray-100">
-        <CardHeader className="space-y-1">
-          <CardTitle className="text-2xl font-semibold tracking-tight text-center">
-            Welcome to HR Automator
-          </CardTitle>
-          <CardDescription className="text-center">
-            Enter your application number to continue your onboarding.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="appNumber">Application Number</Label>
-              <Input
-                id="appNumber"
-                placeholder="e.g. 12345"
-                value={appNumber}
-                onChange={(e) => setAppNumber(e.target.value)}
-                disabled={loading}
-              />
-            </div>
-            
-            {error && (
-              <div className="text-sm text-red-500 font-medium">
-                {error}
-              </div>
-            )}
+    <div className="min-h-screen bg-gray-50 px-4">
+      <div className="max-w-6xl mx-auto">
+        <div className="flex justify-end pt-6">
+          <Button variant="outline" onClick={() => navigate("/hr")}>
+            Login for HR
+          </Button>
+        </div>
+      </div>
 
-            <Button type="submit" className="w-full" disabled={loading || !appNumber.trim()}>
-              {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {loading ? "Validating..." : "Continue"}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+      <div className="min-h-[calc(100vh-96px)] flex items-center justify-center">
+        <Card className="w-full max-w-md shadow-lg border-gray-100">
+          <CardHeader className="space-y-1">
+            <CardTitle className="text-2xl font-semibold tracking-tight text-center">
+              Hello, enter application code
+            </CardTitle>
+            <CardDescription className="text-center">
+              Use the code provided by HR to continue your onboarding.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="appNumber">Application Code</Label>
+                <Input
+                  id="appNumber"
+                  placeholder="e.g. APP-123ABC"
+                  value={appNumber}
+                  onChange={(e) => setAppNumber(e.target.value)}
+                  disabled={loading}
+                />
+              </div>
+
+              {error && (
+                <div className="text-sm text-red-500 font-medium">
+                  {error}
+                </div>
+              )}
+
+              <Button type="submit" className="w-full" disabled={loading || !appNumber.trim()}>
+                {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {loading ? "Validating..." : "Continue"}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
