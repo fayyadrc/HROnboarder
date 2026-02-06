@@ -35,3 +35,15 @@ class ApplicationCode(Base):
     case_id = Column(String, ForeignKey("cases.id"))
     active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class EmployeeRecord(Base):
+    __tablename__ = "employee_records"
+
+    # One employee per case (idempotency)
+    case_id = Column(String, ForeignKey("cases.id"), primary_key=True, index=True)
+    employee_id = Column(String, unique=True, index=True)
+    full_name = Column(String)
+    email = Column(String)
+    department = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)

@@ -1,22 +1,30 @@
 from __future__ import annotations
 
-import asyncio
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from typing import Any, Dict, Optional
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy import text
 
 from app.db.database import engine, SessionLocal
-from sqlalchemy import text
-from app.db.models import Base, HRUser, ApplicationCode, Case
+from app.db.models import ApplicationCode, Base, Case, HRUser
 from app.routes.hr import router as hr_router
-from app.store.case_store import case_store
+from app.services.case_bridge import ensure_case_seeded
 from app.services.orchestrator_service import run_orchestrator_for_case
+from app.store.case_store import case_store
+
+from app.agents.hris_agent import HRISAgent
+from app.agents.it_agent import ITProvisioningAgent
 
 app = FastAPI(title="HR Automator Backend", version="0.1.0")
 
-# Startup: create tables + seed default HR user
+hris_agent = HRISAgent()
+it_agent = ITProvisioningAgent()
+
+
 @app.on_event("startup")
-def _startup():
+def _startup() -> None:
     # Create tables
     Base.metadata.create_all(bind=engine)
 
@@ -25,12 +33,24 @@ def _startup():
         with engine.connect() as conn:
             conn.execute(
                 text(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_application_codes_case_active ON application_codes(case_id) WHERE active=1"
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_application_codes_case_active "
+                    "ON application_codes(case_id) WHERE active=1"
                 )
             )
             conn.commit()
     except Exception:
-        # Non-fatal for demo, index creation may not be supported in some envs
+        # Non-fatal for demo
+        pass
+
+    # Ensure HRIS idempotency: one employee record per case (if table exists)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text("CREATE UNIQUE INDEX IF NOT EXISTS ux_employee_records_case ON employee_records(case_id)")
+            )
+            conn.commit()
+    except Exception:
+        # Non-fatal for demo
         pass
 
     # Seed default HR user (hackathon-only)
@@ -42,6 +62,7 @@ def _startup():
             db.commit()
     finally:
         db.close()
+
 
 # HR routes
 app.include_router(hr_router)
@@ -57,12 +78,17 @@ app.add_middleware(
 
 
 @app.get("/health")
-def health():
+def health() -> Dict[str, bool]:
     return {"ok": True}
 
 
 @app.post("/api/case/init")
-def init_case(payload: dict):
+def init_case(payload: dict) -> Dict[str, Any]:
+    """
+    Candidate entry-point:
+    - Validate applicationCode in DB
+    - Seed case_store using DB Case.id so frontend and backend agree
+    """
     application_code = payload.get("applicationCode")
     if not application_code:
         raise HTTPException(status_code=400, detail="applicationCode required")
@@ -71,13 +97,9 @@ def init_case(payload: dict):
     try:
         code = (
             db.query(ApplicationCode)
-            .filter(
-                ApplicationCode.code == application_code,
-                ApplicationCode.active == True
-            )
+            .filter(ApplicationCode.code == application_code, ApplicationCode.active == True)  # noqa: E712
             .first()
         )
-
         if not code:
             raise HTTPException(status_code=404, detail="Invalid application code")
 
@@ -85,7 +107,6 @@ def init_case(payload: dict):
         if not case:
             raise HTTPException(status_code=404, detail="Case not found")
 
-        # Seed case_store (wizard engine)
         seeded_case = case_store.init_or_get_case(
             application_number=application_code,
             seed={
@@ -94,23 +115,26 @@ def init_case(payload: dict):
                 "workLocation": case.work_location,
                 "nationality": case.nationality,
                 "startDate": case.start_date,
-                "compensation": {
-                    "salary": case.salary
-                },
+                "compensation": {"salary": case.salary},
                 "benefitsContext": case.benefits or {},
                 "priorNotes": case.prior_notes or "",
             },
             case_id=case.id,
         )
 
-        return seeded_case
+        # sync DB status into store
+        if case.status:
+            case_store.set_status(case.id, case.status)
 
+        return seeded_case
     finally:
         db.close()
 
 
 @app.get("/api/case/{case_id}")
-def get_case(case_id: str):
+def get_case(case_id: str) -> Dict[str, Any]:
+    # Curl-first: auto-seed from DB if needed
+    ensure_case_seeded(case_id)
     c = case_store.get_case(case_id)
     if not c:
         return {"error": "Case not found"}
@@ -123,7 +147,8 @@ class SaveStepRequest(BaseModel):
 
 
 @app.post("/api/case/{case_id}/step/{step_key}")
-def save_step(case_id: str, step_key: str, req: SaveStepRequest):
+def save_step(case_id: str, step_key: str, req: SaveStepRequest) -> Dict[str, Any]:
+    ensure_case_seeded(case_id)
     c = case_store.save_step(case_id, step_key, req.payload, req.nextStepIndex)
     if not c:
         return {"error": "Case not found"}
@@ -131,7 +156,6 @@ def save_step(case_id: str, step_key: str, req: SaveStepRequest):
 
 
 class RunAgentsRequest(BaseModel):
-    # Optional overrides / extra context from UI
     notes: str | None = None
 
 
@@ -139,22 +163,21 @@ class SetStatusRequest(BaseModel):
     status: str
 
 
-@app.post("/api/onboard/run/{case_id}")
-async def run_agents(case_id: str, req: RunAgentsRequest):
-    c = case_store.get_case(case_id)
-    if not c:
-        return {"error": "Case not found"}
+class SubmitRequest(BaseModel):
+    notes: str | None = None
 
-    # Fire orchestrator (runs compliance + logistics in parallel)
+
+@app.post("/api/onboard/run/{case_id}")
+async def run_agents(case_id: str, req: RunAgentsRequest) -> Dict[str, Any]:
+    ensure_case_seeded(case_id)
     result = await run_orchestrator_for_case(case_id, notes=req.notes or "")
     return result
 
 
 @app.post("/api/case/{case_id}/status")
-def set_case_status(case_id: str, req: SetStatusRequest):
-    c = case_store.get_case(case_id)
-    if not c:
-        return {"error": "Case not found"}
+def set_case_status(case_id: str, req: SetStatusRequest) -> Dict[str, Any]:
+    ensure_case_seeded(case_id)
+
     db = SessionLocal()
     try:
         db_case = db.query(Case).filter(Case.id == case_id).first()
@@ -166,11 +189,115 @@ def set_case_status(case_id: str, req: SetStatusRequest):
         db.close()
 
     case_store.set_status(case_id, req.status)
-    return case_store.get_case(case_id)
+    return case_store.get_case(case_id) or {"error": "Case not found"}
+
+
+@app.post("/api/case/{case_id}/submit")
+async def submit_case(case_id: str, req: SubmitRequest) -> Dict[str, Any]:
+    # ensure in-memory seeded
+    ensure_case_seeded(case_id)
+
+    # persist status to DB + case_store
+    db = SessionLocal()
+    try:
+        db_case = db.query(Case).filter(Case.id == case_id).first()
+        if not db_case:
+            return {"error": "Case not found"}
+        db_case.status = "ONBOARDING_IN_PROGRESS"
+        db.commit()
+    finally:
+        db.close()
+
+    case_store.set_status(case_id, "ONBOARDING_IN_PROGRESS")
+    case_store.emit(case_id, "case.submitted", {"status": "ONBOARDING_IN_PROGRESS"})
+
+    result = await run_orchestrator_for_case(case_id, notes=req.notes or "")
+    return result
+
+
+@app.post("/api/hris/create/{case_id}")
+async def hris_create(case_id: str) -> Dict[str, Any]:
+    """
+    Curl-testable HRIS stub endpoint (curl-first):
+    - Auto-seeds case_store from DB if needed.
+    - Creates employee_records row idempotently (one per case).
+    """
+    c = ensure_case_seeded(case_id)
+    case_store.emit(case_id, "agent.hris_start", {"msg": "HRIS create invoked via API..."})
+
+    db = SessionLocal()
+    try:
+        res = await hris_agent.run(c, notes="api", db=db)
+    finally:
+        db.close()
+
+    out = {
+        "summary": res.summary,
+        "risks": res.risks,
+        "actions": res.actions,
+        "data": res.data,
+    }
+    case_store.update_agent_output(case_id, "hris", out)
+
+    if any(a.get("type") == "HRIS_IDEMPOTENT_HIT" for a in (res.actions or [])):
+        case_store.emit(case_id, "agent.hris_idempotent_hit", {"employeeId": (res.data or {}).get("employeeId")})
+
+    case_store.emit(
+        case_id,
+        "agent.hris_done",
+        {"summary": res.summary, "employeeId": (res.data or {}).get("employeeId")},
+    )
+    return {"ok": True, "hris": out}
+
+
+@app.post("/api/it/provision/{case_id}")
+async def it_provision(case_id: str) -> Dict[str, Any]:
+    """
+    Curl-testable IT provisioning endpoint (curl-first):
+    - Auto-seeds case_store from DB if needed.
+    - If HRIS output is missing, runs HRIS first (idempotent) then proceeds.
+    """
+    c = ensure_case_seeded(case_id)
+
+    # Ensure HRIS exists (idempotent)
+    hris_out = ((c.get("agentOutputs") or {}).get("hris") or {}).get("data") or {}
+    if not hris_out.get("employeeId"):
+        case_store.emit(case_id, "agent.hris_start", {"msg": "HRIS required for IT; running HRIS idempotently..."})
+        db = SessionLocal()
+        try:
+            hris_res = await hris_agent.run(c, notes="api", db=db)
+        finally:
+            db.close()
+        hris_payload = {
+            "summary": hris_res.summary,
+            "risks": hris_res.risks,
+            "actions": hris_res.actions,
+            "data": hris_res.data,
+        }
+        case_store.update_agent_output(case_id, "hris", hris_payload)
+        c = case_store.get_case(case_id) or c
+
+    case_store.emit(case_id, "agent.it_start", {"msg": "IT provisioning invoked via API..."})
+    res = await it_agent.run(c, notes="api")
+
+    out = {
+        "summary": res.summary,
+        "risks": res.risks,
+        "actions": res.actions,
+        "data": res.data,
+    }
+    case_store.update_agent_output(case_id, "it", out)
+
+    sla_risks = ((res.data or {}).get("slaRisks")) or []
+    if sla_risks:
+        case_store.emit(case_id, "agent.it_sla_risk", {"risks": sla_risks})
+
+    case_store.emit(case_id, "agent.it_done", {"summary": res.summary, "risks": res.risks})
+    return {"ok": True, "it": out}
 
 
 @app.websocket("/ws/{case_id}")
-async def ws_case_events(ws: WebSocket, case_id: str):
+async def ws_case_events(ws: WebSocket, case_id: str) -> None:
     await ws.accept()
     q = case_store.subscribe(case_id)
     try:

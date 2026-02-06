@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from uuid import uuid4
 
 from app.db.database import SessionLocal
-from app.db.models import HRUser, Case, ApplicationCode
+from app.db.models import HRUser, Case, ApplicationCode, EmployeeRecord
 
 router = APIRouter(prefix="/api/hr", tags=["HR"])
 
@@ -101,6 +101,8 @@ def list_cases(db: Session = Depends(get_db)):
                 )
                 .first()
             )
+            emp = db.query(EmployeeRecord).filter(EmployeeRecord.case_id == c.id).first()
+
             result.append({
                 "id": c.id,
                 "candidate_name": c.candidate_name,
@@ -112,7 +114,8 @@ def list_cases(db: Session = Depends(get_db)):
                 "benefits": c.benefits,
                 "prior_notes": c.prior_notes,
                 "status": c.status,
-                "applicationCode": code.code if code else None
+                "applicationCode": code.code if code else None,
+                "employeeId": emp.employee_id if emp else None,
             })
         return result
     except Exception:
