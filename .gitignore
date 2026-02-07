@@ -51,3 +51,18 @@ backend/*.db
 backend/app/services/__pycache__/orchestrator_service.cpython-312.pyc
 
 
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Local sqlite DB (demo)
+*.db
+backend/hr_automator.db
+
+
+# Node/Vite artifacts
+node_modules/
+dist/
+.vite/
+
