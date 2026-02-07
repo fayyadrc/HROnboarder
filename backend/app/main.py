@@ -13,7 +13,6 @@ from app.agents.workplace_agent import WorkplaceServicesAgent
 from app.db.database import SessionLocal, engine
 from app.db.models import ApplicationCode, Base, Case, HRUser
 from app.routes.hr import router as hr_router
-from app.routes.hr_employees_temp import router as employees_router  # TEMP - DELETE after friend implements
 from app.services.case_bridge import ensure_case_seeded
 from app.services.orchestrator_service import run_orchestrator_for_case
 from app.store.case_store import case_store
@@ -71,7 +70,7 @@ def _startup() -> None:
 
 # HR routes
 app.include_router(hr_router)
-app.include_router(employees_router)  # TEMP - DELETE after friend implements
+
 
 # Dev-friendly CORS (hackathon). Tighten later.
 app.add_middleware(

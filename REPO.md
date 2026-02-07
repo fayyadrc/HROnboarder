@@ -152,3 +152,48 @@ login, case creation, case listing, and application-code generation to match the
 [2026-02-07] Updated: backend/app/db/models.py — added WorkplaceAssignment table
 
 [2026-02-07] Updated: backend/app/main.py — added POST /api/workplace/assign/{caseId} curl-first endpoint and workplace assignment index
+
+## Stability Gate (2026-02-07)
+
+# Health
+curl -sS http://127.0.0.1:8000/health | python -m json.tool
+# Expect: {"ok": true}
+
+# Create case + generate code + init case
+curl -sS -X POST http://127.0.0.1:8000/api/hr/cases \
+  -H "Content-Type: application/json" \
+  -d '{"candidate_name":"Demo User","role":"Engineer","nationality":"US","work_location":"HQ","start_date":"2026-03-01","salary":"120000"}' | python -m json.tool
+# Expect: {"case_id": "CASE-..."}
+
+curl -sS -X POST http://127.0.0.1:8000/api/hr/cases/$CASE_ID/generate_code | python -m json.tool
+# Expect: {"applicationCode": "APP-..."}
+
+curl -sS -X POST http://127.0.0.1:8000/api/case/init \
+  -H "Content-Type: application/json" \
+  -d '{"applicationCode":"APP-XXXXXX"}' | python -m json.tool
+# Expect: case payload including status + riskStatus
+
+# Run orchestrator
+curl -sS -X POST http://127.0.0.1:8000/api/onboard/run/$CASE_ID \
+  -H "Content-Type: application/json" \
+  -d '{"notes":"stability-gate"}' | python -m json.tool
+# Expect: {"ok": true, "plan": {...}}
+
+# Check status + riskStatus
+curl -sS http://127.0.0.1:8000/api/case/$CASE_ID | python -m json.tool
+# Expect: "status" lifecycle unchanged (ONBOARDING_IN_PROGRESS or similar)
+# Expect: "riskStatus" set to GREEN or AT_RISK
+
+# Assets: persist asset_id + verify
+export EMP_ID="..."
+curl -sS -X PUT http://127.0.0.1:8000/api/hr/employees/$EMP_ID/assets \
+  -H "Content-Type: application/json" \
+  -d '{"laptop":{"assigned":true,"model":"Dell Latitude 5440","asset_id":"LAP-DEMO-001"},"seat":{"assigned":true,"location":"HQ-3A-41"}}' | python -m json.tool
+# Expect: assets.laptop.asset_id == "LAP-DEMO-001"
+
+curl -sS http://127.0.0.1:8000/api/hr/employees | python -m json.tool
+# Expect: assets.laptop.asset_id == "LAP-DEMO-001" on the matching employee
+
+# Orchestrate endpoint single-wrap
+curl -sS -X POST http://127.0.0.1:8000/api/hr/cases/$CASE_ID/orchestrate | python -m json.tool
+# Expect: top-level keys ok + plan (no nested plan.plan)

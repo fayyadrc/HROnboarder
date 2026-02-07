@@ -106,6 +106,7 @@ class CaseStore:
             "applicationNumber": application_number,
             "candidateName": (seed or {}).get("candidateName") or "Candidate",
             "status": "DRAFT",  # DRAFT | NEGOTIATION_PENDING | ON_HOLD_HR | ONBOARDING_IN_PROGRESS | READY_FOR_DAY1
+            "riskStatus": "GREEN",  # GREEN | AT_RISK
             "currentStepIndex": 0,
             "completedSteps": [],
             "steps": {},
@@ -173,6 +174,15 @@ class CaseStore:
         c["status"] = status
         c["updatedAt"] = _now_iso()
         self.emit(case_id, "system.status_changed", {"status": status})
+        self.persist_case(case_id)
+
+    def set_risk_status(self, case_id: str, risk_status: str) -> None:
+        c = self.cases.get(case_id)
+        if not c:
+            return
+        c["riskStatus"] = risk_status
+        c["updatedAt"] = _now_iso()
+        self.emit(case_id, "system.risk_changed", {"riskStatus": risk_status})
         self.persist_case(case_id)
 
     def delete_case(self, case_id: str) -> bool:

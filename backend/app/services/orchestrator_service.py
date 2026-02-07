@@ -322,13 +322,11 @@ async def run_orchestrator_for_case(case_id: str, notes: str = "") -> Dict[str, 
     case_store.update_agent_output(case_id, "orchestrator", {"plan": plan})
     case_store.emit(case_id, "agent.orchestrator_done", {"msg": "Orchestrator finished. Plan generated.", "plan": plan})
 
-    # Status must reflect outcome (demo clarity)
+    # Risk status reflects outcome; lifecycle status stays onboarding-in-progress after run
     if conflicts:
-        _persist_status(case_id, "AT_RISK")
-        case_store.emit(case_id, "system.status_outcome", {"status": "AT_RISK"})
+        case_store.set_risk_status(case_id, "AT_RISK")
     else:
-        _persist_status(case_id, "READY_FOR_DAY1")
-        case_store.emit(case_id, "system.status_outcome", {"status": "READY_FOR_DAY1"})
+        case_store.set_risk_status(case_id, "GREEN")
 
     return {
         "ok": True,
