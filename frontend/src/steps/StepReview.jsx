@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -10,13 +10,25 @@ import { Loader2, CheckCircle2 } from "lucide-react";
 export function StepReview({ data, onNext, onBack, isPaused }) {
   const [attested, setAttested] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(data?.status === "SUBMITTED_FOR_HR_REVIEW");
+  const submittedStatuses = useMemo(
+    () => new Set(["SUBMITTED_FOR_HR_REVIEW", "ONBOARDING_IN_PROGRESS", "READY_FOR_DAY1", "ONBOARDING_COMPLETE"]),
+    []
+  );
+  const submittedFromServer = submittedStatuses.has(data?.status) || Boolean(data?.steps?.review?.attested);
+  const [submitted, setSubmitted] = useState(submittedFromServer);
 
   const [runningAgents, setRunningAgents] = useState(false);
   const [agentPlan, setAgentPlan] = useState(null);
   const [agentError, setAgentError] = useState("");
+  const [emailInfo, setEmailInfo] = useState("");
 
   const steps = useMemo(() => data?.steps || {}, [data]);
+
+  useEffect(() => {
+    if (submittedFromServer) {
+      setSubmitted(true);
+    }
+  }, [submittedFromServer]);
 
   const Row = ({ label, value }) => (
     <div className="flex justify-between border-b last:border-0 border-gray-100 py-1">
@@ -49,23 +61,13 @@ export function StepReview({ data, onNext, onBack, isPaused }) {
     if (!attested) return;
     setSubmitting(true);
     try {
-      // Run agents first
-      setAgentError("");
-      setRunningAgents(true);
-      try {
-        const res = await api.runAgents("Run from Submit");
-        setAgentPlan(res?.plan || null);
-      } catch (e) {
-        setAgentError(e?.message || "Failed to run agents");
-      } finally {
-        setRunningAgents(false);
-      }
-
-      // Then submit the application
-      await api.setStatus("ONBOARDING_IN_PROGRESS");
       await api.submitStep("review", { attested: true, submittedAt: new Date().toISOString() }, 6);
+      const submitRes = await api.submitCase("Run from Submit");
+      setAgentPlan(submitRes?.plan || null);
+      setEmailInfo(submitRes?.message || "A welcome email will be sent to the candidate shortly.");
       setSubmitted(true);
     } catch (e) {
+      setAgentError(e?.message || "Failed to submit onboarding");
       console.error(e);
     } finally {
       setSubmitting(false);
@@ -83,8 +85,11 @@ export function StepReview({ data, onNext, onBack, isPaused }) {
           <CardDescription className="text-lg pt-2">
             HR will review your details and contact you if needed.
             <br />
+            A welcome email will be sent to the candidate shortly.
+            <br />
             You can close this window.
           </CardDescription>
+          {emailInfo ? <div className="text-sm text-gray-600 mt-3">{emailInfo}</div> : null}
         </CardHeader>
       </Card>
     );

@@ -1,8 +1,37 @@
 from __future__ import annotations
 
+import os
+
+
+def _try_load_dotenv() -> None:
+    """
+    Load backend/.env (preferred) or cwd/.env early, BEFORE importing anything
+    that reads environment variables at import-time.
+    """
+    try:
+        from dotenv import load_dotenv  # type: ignore
+    except Exception:
+        return
+
+    here = os.path.dirname(os.path.abspath(__file__))  # backend/app
+    backend_dir = os.path.abspath(os.path.join(here, ".."))  # backend/
+
+    candidates = [
+        os.path.join(backend_dir, ".env"),  # backend/.env (your case)
+        os.path.join(os.getcwd(), ".env"),  # fallback
+    ]
+
+    for p in candidates:
+        if os.path.exists(p):
+            load_dotenv(p, override=False)
+            break
+
+
+_try_load_dotenv()
+
 from typing import Any, Dict
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -12,7 +41,10 @@ from app.agents.it_agent import ITProvisioningAgent
 from app.agents.workplace_agent import WorkplaceServicesAgent
 from app.db.database import SessionLocal, engine
 from app.db.models import ApplicationCode, Base, Case, HRUser
+from app.llm.routes import router as llm_router
+from app.routes.email import router as email_router, send_welcome_email_for_case
 from app.routes.hr import router as hr_router
+from app.routes.stock import router as stock_router
 from app.services.case_bridge import ensure_case_seeded
 from app.services.orchestrator_service import run_orchestrator_for_case
 from app.store.case_store import case_store
@@ -70,6 +102,9 @@ def _startup() -> None:
 
 # HR routes
 app.include_router(hr_router)
+app.include_router(email_router)
+app.include_router(stock_router)
+app.include_router(llm_router)
 
 
 # Dev-friendly CORS (hackathon). Tighten later.
@@ -140,7 +175,7 @@ def get_case(case_id: str) -> Dict[str, Any]:
     ensure_case_seeded(case_id)
     c = case_store.get_case(case_id)
     if not c:
-        return {"error": "Case not found"}
+        raise HTTPException(status_code=404, detail="Case not found")
     return c
 
 
@@ -154,7 +189,7 @@ def save_step(case_id: str, step_key: str, req: SaveStepRequest) -> Dict[str, An
     ensure_case_seeded(case_id)
     c = case_store.save_step(case_id, step_key, req.payload, req.nextStepIndex)
     if not c:
-        return {"error": "Case not found"}
+        raise HTTPException(status_code=404, detail="Case not found")
     return c
 
 
@@ -173,7 +208,10 @@ class SubmitRequest(BaseModel):
 @app.post("/api/onboard/run/{case_id}")
 async def run_agents(case_id: str, req: RunAgentsRequest) -> Dict[str, Any]:
     ensure_case_seeded(case_id)
-    return await run_orchestrator_for_case(case_id, notes=req.notes or "")
+    result = await run_orchestrator_for_case(case_id, notes=req.notes or "")
+    if isinstance(result, dict) and result.get("error"):
+        raise HTTPException(status_code=404, detail=str(result["error"]))
+    return result
 
 
 @app.post("/api/case/{case_id}/status")
@@ -184,25 +222,28 @@ def set_case_status(case_id: str, req: SetStatusRequest) -> Dict[str, Any]:
     try:
         db_case = db.query(Case).filter(Case.id == case_id).first()
         if not db_case:
-            return {"error": "Case not found"}
+            raise HTTPException(status_code=404, detail="Case not found")
         db_case.status = req.status
         db.commit()
     finally:
         db.close()
 
     case_store.set_status(case_id, req.status)
-    return case_store.get_case(case_id) or {"error": "Case not found"}
+    payload = case_store.get_case(case_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return payload
 
 
 @app.post("/api/case/{case_id}/submit")
-async def submit_case(case_id: str, req: SubmitRequest) -> Dict[str, Any]:
+async def submit_case(case_id: str, req: SubmitRequest, background_tasks: BackgroundTasks) -> Dict[str, Any]:
     ensure_case_seeded(case_id)
 
     db = SessionLocal()
     try:
         db_case = db.query(Case).filter(Case.id == case_id).first()
         if not db_case:
-            return {"error": "Case not found"}
+            raise HTTPException(status_code=404, detail="Case not found")
         db_case.status = "ONBOARDING_IN_PROGRESS"
         db.commit()
     finally:
@@ -210,8 +251,19 @@ async def submit_case(case_id: str, req: SubmitRequest) -> Dict[str, Any]:
 
     case_store.set_status(case_id, "ONBOARDING_IN_PROGRESS")
     case_store.emit(case_id, "case.submitted", {"status": "ONBOARDING_IN_PROGRESS"})
+    orchestrator_result = await run_orchestrator_for_case(case_id, notes=req.notes or "")
+    if isinstance(orchestrator_result, dict) and orchestrator_result.get("error"):
+        raise HTTPException(status_code=500, detail=str(orchestrator_result["error"]))
 
-    return await run_orchestrator_for_case(case_id, notes=req.notes or "")
+    if orchestrator_result.get("ok"):
+        try:
+            background_tasks.add_task(send_welcome_email_for_case, case_id, None, None)
+            case_store.emit(case_id, "email.queued", {"type": "WELCOME", "case_id": case_id})
+            orchestrator_result["message"] = "Welcome email will be sent shortly."
+        except Exception as e:
+            case_store.emit(case_id, "email.error", {"type": "WELCOME", "error": str(e)})
+
+    return orchestrator_result
 
 
 @app.post("/api/hris/create/{case_id}")

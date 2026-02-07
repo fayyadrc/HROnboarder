@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
-import { hrLogin, createCase, generateApplicationCode, listCases, deleteCase, resumeCase, updateCase, listEmployees, getEmployeeDetails, updateEmployeeAssets, runOrchestrator } from "@/lib/mockApi";
+import { hrLogin, createCase, generateApplicationCode, listCases, deleteCase, resumeCase, updateCase, listEmployees, getEmployeeDetails, updateEmployeeAssets, runOrchestrator, sendLowStockEmail, stockCheck } from "../lib/mockApi";
 import { Trash2, Play, Pencil, Briefcase, Users, Download, Laptop, MapPin, FileText, ChevronDown, ChevronRight, User, CheckCircle2, Clock, AlertCircle } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
@@ -40,6 +40,11 @@ export function HRPage() {
   const [generatedCode, setGeneratedCode] = useState(null);
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState({});
+  const [itEmail, setItEmail] = useState("it-servicedesk@company.com");
+  const [requestedModel, setRequestedModel] = useState("qwen2.5 standard laptop bundle");
+  const [missingItems, setMissingItems] = useState([]);
+  const [emailPreview, setEmailPreview] = useState(null);
+  const [emailStatus, setEmailStatus] = useState("");
 
   // Employees state
   const [employees, setEmployees] = useState([]);
@@ -89,6 +94,11 @@ export function HRPage() {
       setSelectedEmployee(null);
     }
   }, [selectedEmployeeId]);
+
+  useEffect(() => {
+    setEmailStatus("");
+    setEmailPreview(null);
+  }, [selectedCaseId]);
 
   // Validate start date is not before current date
   const validateStartDate = (dateString) => {
@@ -369,6 +379,16 @@ export function HRPage() {
                   setEditOpen={setEditOpen}
                   onGenerate={onGenerate}
                   onResume={onResume}
+                  itEmail={itEmail}
+                  setItEmail={setItEmail}
+                  requestedModel={requestedModel}
+                  setRequestedModel={setRequestedModel}
+                  missingItems={missingItems}
+                  setMissingItems={setMissingItems}
+                  emailPreview={emailPreview}
+                  setEmailPreview={setEmailPreview}
+                  emailStatus={emailStatus}
+                  setEmailStatus={setEmailStatus}
                 />
               )}
 
@@ -532,6 +552,16 @@ function CasesView({
   setEditOpen,
   onGenerate,
   onResume,
+  itEmail,
+  setItEmail,
+  requestedModel,
+  setRequestedModel,
+  missingItems,
+  setMissingItems,
+  emailPreview,
+  setEmailPreview,
+  emailStatus,
+  setEmailStatus,
 }) {
   const handleRunOrchestrator = async (caseId) => {
     setBusy(true);
@@ -578,6 +608,41 @@ function CasesView({
       setBusy(false);
     }
   };
+
+  async function onSendLowStockEmail(caseId) {
+    try {
+      setEmailStatus("Sending...");
+      const res = await sendLowStockEmail(caseId, itEmail, requestedModel, missingItems);
+      if (res?.skipped) {
+        setEmailStatus(res.reason || "Already sent");
+      } else if (res?.queued && res?.email) {
+        setEmailPreview(res.email);
+        setEmailStatus("Queued");
+      } else if (res?.ok && res?.email) {
+        setEmailPreview(res.email);
+        setEmailStatus("Sent");
+      } else {
+        setEmailStatus("Failed (bad response)");
+      }
+    } catch (e) {
+      setEmailStatus(`Failed: ${e?.message || e}`);
+    }
+  }
+
+  async function onCheckStock() {
+    try {
+      setEmailStatus("Checking stock...");
+      const res = await stockCheck(requestedModel);
+      if (res?.ok) {
+        setMissingItems(res.missingItems || []);
+        setEmailStatus(`Stock: ${res.stockStatus}`);
+      } else {
+        setEmailStatus("Stock check failed");
+      }
+    } catch (e) {
+      setEmailStatus(`Stock check failed: ${e?.message || e}`);
+    }
+  }
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <Card className="shadow-md border-gray-100">
@@ -823,6 +888,62 @@ function CasesView({
                       {busy ? "Assigning Assets..." : "Automate Logistics & Provisioning"}
                     </Button>
                   )}
+
+                  <div style={{ border: "1px solid #ddd", padding: 12, borderRadius: 8, marginTop: 12 }}>
+                    <h3 style={{ margin: 0, marginBottom: 10 }}>IT Low-Stock Email</h3>
+
+                    <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                      <input
+                        style={{ flex: 1, padding: 8 }}
+                        value={itEmail}
+                        onChange={(e) => setItEmail(e.target.value)}
+                        placeholder="IT email (e.g., it-servicedesk@company.com)"
+                      />
+                      <input
+                        style={{ flex: 1, padding: 8 }}
+                        value={requestedModel}
+                        onChange={(e) => setRequestedModel(e.target.value)}
+                        placeholder="Requested laptop/model"
+                      />
+                    </div>
+
+                    <div style={{ marginBottom: 8 }}>
+                      <input
+                        style={{ width: "100%", padding: 8 }}
+                        value={missingItems.join(", ")}
+                        onChange={(e) =>
+                          setMissingItems(
+                            e.target.value
+                              .split(",")
+                              .map((x) => x.trim())
+                              .filter(Boolean)
+                          )
+                        }
+                        placeholder="Missing/low items (comma-separated)"
+                      />
+                    </div>
+
+                    <button onClick={onCheckStock} style={{ padding: "8px 12px", marginRight: 8 }}>
+                      Check Stock
+                    </button>
+                    <button
+                      onClick={() => onSendLowStockEmail(selected.id)}
+                      disabled={missingItems.length === 0}
+                      style={{ padding: "8px 12px", opacity: missingItems.length === 0 ? 0.6 : 1 }}
+                    >
+                      Email IT: Low Stock
+                    </button>
+
+                    {emailStatus ? <div style={{ marginTop: 8 }}><b>Status:</b> {emailStatus}</div> : null}
+
+                    {emailPreview ? (
+                      <div style={{ marginTop: 12, background: "#fafafa", padding: 10, borderRadius: 8 }}>
+                        <div><b>To:</b> {emailPreview.to}</div>
+                        <div><b>Subject:</b> {emailPreview.subject}</div>
+                        <pre style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>{emailPreview.body}</pre>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               </div>
             )}

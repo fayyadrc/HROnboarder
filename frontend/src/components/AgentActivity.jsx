@@ -11,6 +11,15 @@ const typeToLabel = (t) => {
   return "event";
 };
 
+const eventToMessage = (evt) => {
+  const t = evt?.type || "";
+  const p = evt?.payload || {};
+  if (t === "email.queued") return p.type === "IT_LOW_STOCK" ? "IT low-stock email queued..." : "Welcome email queued...";
+  if (t === "email.sent") return p?.meta?.type === "IT_LOW_STOCK" ? "IT low-stock email sent (logged)." : "Welcome email sent (logged).";
+  if (t === "email.error") return p.type === "IT_LOW_STOCK" ? `IT low-stock email failed: ${p.error || "unknown error"}` : `Welcome email failed: ${p.error || "unknown error"}`;
+  return null;
+};
+
 export default function AgentActivity() {
   const [events, setEvents] = useState([]);
   const wsEndpoint = useMemo(() => {
@@ -76,6 +85,9 @@ export default function AgentActivity() {
                   <div className="text-xs opacity-70">
                     {e.ts} — {e.type}
                   </div>
+                  {eventToMessage(e) ? (
+                    <div className="text-xs text-blue-700 py-1">{eventToMessage(e)}</div>
+                  ) : null}
                   <pre className="text-xs whitespace-pre-wrap break-words m-0">
                     {JSON.stringify(e.payload, null, 2)}
                   </pre>

@@ -197,3 +197,137 @@ curl -sS http://127.0.0.1:8000/api/hr/employees | python -m json.tool
 # Orchestrate endpoint single-wrap
 curl -sS -X POST http://127.0.0.1:8000/api/hr/cases/$CASE_ID/orchestrate | python -m json.tool
 # Expect: top-level keys ok + plan (no nested plan.plan)
+
+[2026-02-07 18:17] Added: backend/app/llm/__init__.py - LLM module package marker
+[2026-02-07 18:17] Added: backend/app/llm/client.py - Runpod Ollama client with safe JSON parsing
+[2026-02-07 18:17] Added: backend/app/llm/routes.py - LLM curl-first endpoints (/api/llm/ping, /api/llm/json)
+[2026-02-07 18:17] Modified: backend/app/main.py - Load backend/.env, register LLM router
+[2026-02-07 18:17] Modified: backend/requirements.txt - Add requests and python-dotenv
+Testing: curl -sS http://127.0.0.1:8000/api/llm/ping | python -m json.tool
+Testing: curl -sS -X POST http://127.0.0.1:8000/api/llm/json -H "Content-Type: application/json" -d '{"prompt":"{\"ok\":true}","mode":"chat"}' | python -m json.tool
+[2026-02-07 18:18] Modified: backend/app/main.py - Move dotenv loading to top before LLM imports
+
+[2026-02-07 18:56] Added: backend/app/services/email_service.py - Email outbox writer with idempotent flags and WS emit
+[2026-02-07 18:56] Added: backend/app/llm/email_prompts.py - LLM prompt builders for email generation
+[2026-02-07 18:56] Added: backend/app/routes/email.py - Email endpoints for welcome + IT low stock
+[2026-02-07 18:56] Modified: backend/app/main.py - Register email routes and auto-send welcome on submit
+[2026-02-07 18:56] Modified: frontend/src/lib/mockApi.js - Add IT low stock email API call
+[2026-02-07 18:56] Modified: frontend/src/pages/HRPage.jsx - Add “Email IT: Low Stock” button and preview
+Testing: curl -sS -X POST http://127.0.0.1:8000/api/email/it_low_stock/CASE-XXX -H "Content-Type: application/json" -d '{"it_email":"it@company.com","requested_model":"Standard Laptop","missing_or_low":[]}' | python -m json.tool
+[2026-02-07 19:02] Added: backend/app/tools/stock_tools.py - Deterministic IT stock check helper
+[2026-02-07 19:02] Added: backend/app/routes/stock.py - POST /api/it/stock_check endpoint
+[2026-02-07 19:02] Modified: backend/app/main.py - Registered stock router and updated submit hook to emit email.error on welcome send failure
+[2026-02-07 19:02] Modified: frontend/src/lib/mockApi.js - Added sendLowStockEmail and stockCheck API helpers
+[2026-02-07 19:02] Modified: frontend/src/pages/HRPage.jsx - Added IT low-stock panel with stock check and email send flow
+
+### 2026-02-07 (Hackathon Patch: DB Persistence + Queued Emails)
+- Updated: `backend/app/db/database.py`
+  - DB now defaults to file-based SQLite: `sqlite:///backend/app/db/hr_automator.db`
+  - `DATABASE_URL` env var is still respected
+  - SQLite directory is created automatically before engine init
+  - Uses `check_same_thread=False` for SQLite
+- Updated: `backend/app/main.py`
+  - `POST /api/case/{case_id}/submit` now queues welcome email **after** orchestrator returns OK
+  - Queueing uses FastAPI `BackgroundTasks`; onboarding response is not blocked by LLM latency
+  - Emits `email.queued` event and never crashes onboarding on email issues
+- Updated: `backend/app/routes/email.py`
+  - Hardened email routes with top-level try/except + `email.error` event emission
+  - `POST /api/email/welcome/{case_id}` accepts optional body `{to_email, requested_model}` and queues background send
+  - `POST /api/email/it_low_stock/{case_id}` queues background send and returns immediate preview payload
+  - Added shared background helpers for welcome and IT low-stock sends
+- Updated: `backend/app/services/email_service.py`
+  - Outbox reliability hardening for `backend/app/logs/emails/outbox.jsonl`
+  - Always creates directory and file (`mkdir + touch`)
+  - Safe append with optional `filelock`, fallback to basic append/file-locking behavior
+  - No-throw outbox logger and deterministic fallback emails if LLM fails
+  - Step flags persisted in case store (`email_welcome_sent`, `email_it_low_stock_sent`)
+- Updated: `backend/app/llm/email_prompts.py`
+  - Added strict JSON prompts for welcome + IT low-stock emails
+  - Includes personalization fields: candidate, role, location, start date, laptop, seating, case id
+- Updated: `backend/app/llm/client.py`
+  - DNS host resolution checks are now lazy per-call (no stale import-time host usage)
+- Updated: `frontend/src/steps/StepIdentity.jsx`
+  - Identity payload now also stores `candidateEmail` and `personalEmail` aliases
+- Updated: `frontend/src/steps/StepReview.jsx`
+  - Submit path uses `/api/case/{case_id}/submit`
+  - Completion card now appends: "A welcome email will be sent to the candidate shortly."
+- Updated: `frontend/src/components/AgentActivity.jsx`
+  - Friendly UI messages for `email.queued`, `email.sent`, `email.error`
+- Updated: `frontend/src/pages/HRPage.jsx`
+  - IT low-stock panel now handles queued response state cleanly
+- Updated: `frontend/src/lib/mockApi.js`
+  - Added `api.submitCase(notes)` helper to call submit endpoint
+- Added: `docs/EMAILS.md`
+  - Trigger model, outbox format, curl commands, troubleshooting, manual validation flow
+
+DB reset note:
+- Delete `backend/app/db/hr_automator.db` to reset persistent local state.
+
+Manual validation commands (do not auto-run):
+```bash
+# 1) Start backend
+cd backend
+uvicorn app.main:app --reload
+
+# 2) Ping LLM
+curl -sS http://127.0.0.1:8000/api/llm/ping | python -m json.tool
+
+# 3) Create case
+curl -sS -X POST http://127.0.0.1:8000/api/hr/cases \
+  -H "Content-Type: application/json" \
+  -d '{"candidate_name":"Demo User","role":"Engineer","nationality":"US","work_location":"HQ","start_date":"2026-03-01","salary":"120000"}' | python -m json.tool
+
+# 4) Generate code + init session
+curl -sS -X POST http://127.0.0.1:8000/api/hr/cases/$CASE_ID/generate_code | python -m json.tool
+curl -sS -X POST http://127.0.0.1:8000/api/case/init \
+  -H "Content-Type: application/json" \
+  -d '{"applicationCode":"APP-XXXXXX"}' | python -m json.tool
+
+# 5) Submit onboarding and queue welcome email after orchestrator
+curl -sS -X POST http://127.0.0.1:8000/api/case/$CASE_ID/submit \
+  -H "Content-Type: application/json" \
+  -d '{"notes":"demo submit"}' | python -m json.tool
+
+# 6) Confirm outbox WELCOME entry
+tail -n 20 backend/app/logs/emails/outbox.jsonl
+
+# 7) Stock check + IT low-stock email
+curl -sS -X POST http://127.0.0.1:8000/api/it/stock_check \
+  -H "Content-Type: application/json" \
+  -d '{"requested_model":"qwen2.5 laptop bundle"}' | python -m json.tool
+
+curl -sS -X POST http://127.0.0.1:8000/api/email/it_low_stock/$CASE_ID \
+  -H "Content-Type: application/json" \
+  -d '{"it_email":"it-servicedesk@company.com","requested_model":"qwen2.5 laptop bundle","missing_or_low":["qwen2.5 laptop bundle","usb-c dock"]}' | python -m json.tool
+
+# 8) Confirm outbox IT_LOW_STOCK entry
+tail -n 20 backend/app/logs/emails/outbox.jsonl
+
+# 9) Restart backend and confirm DB persistence
+curl -sS http://127.0.0.1:8000/api/hr/cases | python -m json.tool
+```
+
+### 2026-02-07 (Diagnostic Repair Pass)
+- Fixed: `backend/app/services/email_service.py`
+  - Outbox path is now module-anchored (`backend/app/logs/emails/outbox.jsonl`) instead of CWD-relative.
+- Fixed: `backend/app/llm/client.py`
+  - LLM log directory default is now module-anchored (`backend/app/logs/llm`), with safe relative env handling.
+- Fixed: `backend/app/main.py`
+  - Missing-case responses for case endpoints now return HTTP `404` instead of `200` error payloads.
+  - Orchestrator error output is normalized to HTTP errors in run/submit endpoints.
+- Fixed: `frontend/src/steps/StepReview.jsx`
+  - Submitted success state now survives page refresh for active onboarding statuses.
+- Fixed: `frontend/src/pages/Onboarding.jsx`
+  - Back navigation now persists `currentStepIndex` to backend.
+- Fixed: `frontend/src/lib/mockApi.js`
+  - WebSocket URL now uses `window.location.host` (no hardcoded dev port).
+- Improved: `frontend/src/components/AgentActivity.jsx`
+  - Email activity labels now differentiate WELCOME vs IT low-stock events.
+- Improved: `frontend/src/pages/HRPage.jsx`
+  - IT low-stock send UI now handles `skipped` responses correctly.
+- Added: `docs/REPO.md`
+  - Detailed repair changelog and verification outcomes.
+- Added: `docs/ARCHITECTURE.md`
+  - Current backend/frontend architecture and data flow.
+- Added: `README.md`
+  - Quick start and doc index.

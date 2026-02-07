@@ -36,7 +36,15 @@ export function StepIdentity({ data, onNext, onBack, isPaused }) {
   });
 
   const onSubmit = (formData) => {
-    onNext("identity", formData, 3);
+    onNext(
+      "identity",
+      {
+        ...formData,
+        candidateEmail: formData.email,
+        personalEmail: formData.email,
+      },
+      3
+    );
   };
 
   return (

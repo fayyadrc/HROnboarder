@@ -76,15 +76,9 @@ export function OnboardingPage() {
     // Optimistic update
     setCaseData(prev => ({ ...prev, currentStepIndex: prevIndex }));
     
-    // Background sync (optional, or we can just keep it local state if we don't want to sync "backwards" movement)
-    // Requirements: "Resume... takes user to currentStepIndex". So we should sync it.
-    api.saveStep('navigation_sync', {}).then(() => {
-       // We might need a specific API to just update index, but submitStep handles it.
-       // We can hack it or add updateIndex to API.
-       // For now let's just assume we don't strictly need to persist BACK navigation for "resume", 
-       // but it's nice. Let's send a dummy update or add a helper.
-       // Accessing internal API method or just using setStatus might be overkill.
-       // Let's just update local state for Back, and rely on Next to save progress.
+    // Persist backward navigation index so refresh resumes at the same step.
+    api.saveStep("navigation_sync", {}, prevIndex).catch(() => {
+      // Keep UX responsive even if persistence fails.
     });
   };
 

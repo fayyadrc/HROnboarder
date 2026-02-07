@@ -95,15 +95,20 @@ export const api = {
     });
   },
 
+  submitCase: async (notes = "") => {
+    const s = requireSession();
+    return jsonFetch(`/api/case/${s.caseId}/submit`, {
+      method: "POST",
+      body: JSON.stringify({ notes }),
+    });
+  },
+
   wsUrl: () => {
     const s = getSession();
     if (!s?.caseId) throw new Error("No active session");
     try {
-      const hostname = window.location.hostname || "localhost";
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
-      // Prefer Vite dev proxy port (5173) for websockets in dev
-      const port = 5173;
-      return `${proto}://${hostname}:${port}/ws/${s.caseId}`;
+      return `${proto}://${window.location.host}/ws/${s.caseId}`;
     } catch (e) {
       // Fallback to relative
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -152,6 +157,20 @@ export const updateCase = async (caseId, payload) => {
 export const runOrchestrator = async (caseId) => {
   return jsonFetch(`/api/hr/cases/${caseId}/orchestrate`, { method: "POST" });
 };
+
+export async function sendLowStockEmail(caseId, it_email, requested_model, missing_or_low = []) {
+  return jsonFetch(`/api/email/it_low_stock/${caseId}`, {
+    method: "POST",
+    body: JSON.stringify({ it_email, requested_model, missing_or_low }),
+  });
+}
+
+export async function stockCheck(requested_model) {
+  return jsonFetch(`/api/it/stock_check`, {
+    method: "POST",
+    body: JSON.stringify({ requested_model }),
+  });
+}
 
 // Employee-related API calls
 export const listEmployees = async () => {
