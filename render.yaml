@@ -1,0 +1,31 @@
+services:
+  # Backend - FastAPI
+  - type: web
+    name: hronboarder-backend-test
+    runtime: python
+    region: oregon
+    branch: test
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    rootDir: backend
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+  # Frontend - Vite React
+  - type: web
+    name: hronboarder-frontend-test
+    runtime: static
+    region: oregon
+    branch: test
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    rootDir: frontend
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: no-cache
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
