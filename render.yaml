@@ -12,9 +12,9 @@ services:
       - key: PYTHON_VERSION
         value: "3.11"
 
+staticSites:
   # Frontend - Vite React
-  - type: static_site
-    name: hronboarder-frontend-test
+  - name: hronboarder-frontend-test
     branch: test
     buildCommand: npm install && npm run build
     staticPublishPath: dist
