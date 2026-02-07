@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { hrLogin, createCase, generateApplicationCode, listCases, deleteCase, resumeCase, updateCase, listEmployees, getEmployeeDetails, updateEmployeeAssets, runOrchestrator } from "@/lib/mockApi";
-import { Trash2, Play, Pencil, Briefcase, Users, Download, Laptop, MapPin, FileText, ChevronDown, ChevronRight, User, CheckCircle2, Clock, AlertCircle } from "lucide-react";
+import { Trash2, Play, Pencil, Briefcase, Users, Download, Laptop, MapPin, FileText, ChevronDown, ChevronRight, User, CheckCircle2, Clock, AlertCircle, XCircle, PauseCircle, TrendingUp, FileStack } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 
@@ -533,6 +533,29 @@ function CasesView({
   onGenerate,
   onResume,
 }) {
+  // Dashboard metrics calculation
+  const metrics = useMemo(() => {
+    const total = cases.length;
+    const onHold = cases.filter(c => 
+      c.status === "ON_HOLD_HR" || 
+      c.status === "ON_HOLD" || 
+      c.status === "NEGOTIATION_PENDING"
+    ).length;
+    const inProgress = cases.filter(c => 
+      c.status?.includes("PROGRESS") || 
+      c.status === "SUBMITTED" ||
+      c.status === "ONBOARDING_IN_PROGRESS" ||
+      c.status === "READY_DAY1" ||
+      c.status === "READY_FOR_DAY1" ||
+      c.status === "ONBOARDING_COMPLETE" ||
+      c.status === "HRIS_COMPLETED"
+    ).length;
+    const declined = cases.filter(c => c.status === "DECLINED").length;
+    const draft = cases.filter(c => !c.status || c.status === "DRAFT").length;
+    
+    return { total, onHold, inProgress, declined, draft };
+  }, [cases]);
+
   const handleRunOrchestrator = async (caseId) => {
     setBusy(true);
     try {
@@ -579,7 +602,76 @@ function CasesView({
     }
   };
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div className="space-y-6">
+      {/* Dashboard Metrics Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {/* Total Cases */}
+        <Card className="bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200 shadow-sm">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-blue-600">Total Cases</p>
+                <p className="text-3xl font-bold text-blue-900">{metrics.total}</p>
+              </div>
+              <div className="p-3 bg-blue-200 rounded-full">
+                <FileStack className="h-6 w-6 text-blue-700" />
+              </div>
+            </div>
+            <p className="text-xs text-blue-600 mt-2">All onboarding cases</p>
+          </CardContent>
+        </Card>
+
+        {/* In Progress / Submitted */}
+        <Card className="bg-gradient-to-br from-green-50 to-green-100 border-green-200 shadow-sm">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-green-600">Submitted</p>
+                <p className="text-3xl font-bold text-green-900">{metrics.inProgress}</p>
+              </div>
+              <div className="p-3 bg-green-200 rounded-full">
+                <CheckCircle2 className="h-6 w-6 text-green-700" />
+              </div>
+            </div>
+            <p className="text-xs text-green-600 mt-2">Active & completed</p>
+          </CardContent>
+        </Card>
+
+        {/* On Hold */}
+        <Card className="bg-gradient-to-br from-amber-50 to-amber-100 border-amber-200 shadow-sm">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-amber-600">On Hold</p>
+                <p className="text-3xl font-bold text-amber-900">{metrics.onHold}</p>
+              </div>
+              <div className="p-3 bg-amber-200 rounded-full">
+                <PauseCircle className="h-6 w-6 text-amber-700" />
+              </div>
+            </div>
+            <p className="text-xs text-amber-600 mt-2">Awaiting action</p>
+          </CardContent>
+        </Card>
+
+        {/* Declined */}
+        <Card className="bg-gradient-to-br from-red-50 to-red-100 border-red-200 shadow-sm">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-red-600">Declined</p>
+                <p className="text-3xl font-bold text-red-900">{metrics.declined}</p>
+              </div>
+              <div className="p-3 bg-red-200 rounded-full">
+                <XCircle className="h-6 w-6 text-red-700" />
+              </div>
+            </div>
+            <p className="text-xs text-red-600 mt-2">Offers declined</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Main Content Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <Card className="shadow-md border-gray-100">
         <CardHeader>
           <CardTitle>Create Onboarding Case</CardTitle>
@@ -817,6 +909,7 @@ function CasesView({
           </div>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }
