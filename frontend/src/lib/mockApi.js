@@ -4,6 +4,15 @@
 
 const SESSION_KEY = "hr_automator_session";
 const STORAGE_KEY = "hr_automator_case";
+const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/+$/, "");
+const WS_BASE = (import.meta.env.VITE_WS_BASE || "").replace(/\/+$/, "");
+
+function _resolveApiUrl(url) {
+  if (/^https?:\/\//i.test(url)) return url;
+  if (!API_BASE) return url;
+  if (url.startsWith("/")) return `${API_BASE}${url}`;
+  return `${API_BASE}/${url}`;
+}
 
 function _parseJsonSafe(res) {
   return res.json().catch(() => ({}));
@@ -26,7 +35,8 @@ export function requireSession() {
 
 export async function jsonFetch(url, options = {}) {
   const opts = { headers: { "Content-Type": "application/json", ...(options.headers || {}) }, ...options };
-  const res = await fetch(url, opts);
+  const resolvedUrl = _resolveApiUrl(url);
+  const res = await fetch(resolvedUrl, opts);
   const data = await _parseJsonSafe(res);
   if (!res.ok) {
     const message = data?.detail || data?.error || `HTTP ${res.status}`;
@@ -98,14 +108,18 @@ export const api = {
   wsUrl: () => {
     const s = getSession();
     if (!s?.caseId) throw new Error("No active session");
+    if (WS_BASE) return `${WS_BASE}/ws/${s.caseId}`;
     try {
       const hostname = window.location.hostname || "localhost";
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
-      // Prefer Vite dev proxy port (5173) for websockets in dev
-      const port = 5173;
-      return `${proto}://${hostname}:${port}/ws/${s.caseId}`;
+      const isLocal = hostname === "localhost" || hostname === "127.0.0.1";
+      if (isLocal) {
+        // Prefer Vite dev proxy port (5173) for websockets in dev
+        const port = 5173;
+        return `${proto}://${hostname}:${port}/ws/${s.caseId}`;
+      }
+      return `${proto}://${window.location.host}/ws/${s.caseId}`;
     } catch (e) {
-      // Fallback to relative
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
       return `${proto}://${window.location.host}/ws/${s.caseId}`;
     }

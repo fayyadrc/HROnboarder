@@ -50,7 +50,6 @@ Completed and verified end-to-end.
 
 
 
-
 Added Vite dev proxy for /api and /ws to route frontend requests to the backend cleanly. Implemented HRPage with HR
 login, case creation, case listing, and application-code generation to match the intended demo flow.
 
@@ -127,3 +126,74 @@ login, case creation, case listing, and application-code generation to match the
 - Testing: curl -s -X POST http://localhost:8000/api/case/$CASE/submit \
   -H "Content-Type: application/json" \
   -d '{"notes":"demo submit"}' | python -m json.tool
+
+### 2026-02-07 (Milestone 3: Workplace + Persistence)
+- Added: backend/app/agents/workplace_agent.py — Workplace Services agent (equipment bundle + seating assignment)
+- Added: backend/app/tools/workplace_tools.py — deterministic workplace equipment + seating plan rules
+- Added: backend/app/db/models.py — CaseState table for persisted case_store snapshot
+- Updated: backend/app/store/case_store.py — auto-persist case state on step/status/agent updates; restore from DB
+- Updated: backend/app/services/case_bridge.py — loads persisted CaseState before DB seeding
+- Updated: backend/app/services/orchestrator_service.py — runs Workplace Services, adds output to plan/day1Readiness
+- Updated: backend/app/main.py — hardened HRIS/IT endpoints and keeps WS streaming intact
+- Testing: curl -s -X POST http://localhost:8000/api/onboard/run/$CASE \
+  -H "Content-Type: application/json" \
+  -d '{"notes":"milestone3"}' | python -m json.tool
+
+[2026-02-07] Updated: backend/app/services/orchestrator_service.py — status outcome now reflects run result (READY_FOR_DAY1 / AT_RISK) and plan includes decision-ready recommendations
+
+[2026-02-07] Updated: backend/app/tools/workplace_tools.py — workplace bundle now outputs concrete deviceModel for consistent provisioning
+
+[2026-02-07] Updated: backend/app/agents/logistics_agent.py — logistics now validates Workplace-chosen device model (supply/ETA) to avoid device mismatch
+
+[2026-02-07] Updated: backend/app/agents/it_agent.py — IT provisions Workplace-selected deviceModel when present
+
+[2026-02-07] Updated: backend/app/agents/workplace_agent.py — DB-backed idempotency via workplace_assignments
+
+[2026-02-07] Updated: backend/app/db/models.py — added WorkplaceAssignment table
+
+[2026-02-07] Updated: backend/app/main.py — added POST /api/workplace/assign/{caseId} curl-first endpoint and workplace assignment index
+
+## Stability Gate (2026-02-07)
+
+# Health
+curl -sS http://127.0.0.1:8000/health | python -m json.tool
+# Expect: {"ok": true}
+
+# Create case + generate code + init case
+curl -sS -X POST http://127.0.0.1:8000/api/hr/cases \
+  -H "Content-Type: application/json" \
+  -d '{"candidate_name":"Demo User","role":"Engineer","nationality":"US","work_location":"HQ","start_date":"2026-03-01","salary":"120000"}' | python -m json.tool
+# Expect: {"case_id": "CASE-..."}
+
+curl -sS -X POST http://127.0.0.1:8000/api/hr/cases/$CASE_ID/generate_code | python -m json.tool
+# Expect: {"applicationCode": "APP-..."}
+
+curl -sS -X POST http://127.0.0.1:8000/api/case/init \
+  -H "Content-Type: application/json" \
+  -d '{"applicationCode":"APP-XXXXXX"}' | python -m json.tool
+# Expect: case payload including status + riskStatus
+
+# Run orchestrator
+curl -sS -X POST http://127.0.0.1:8000/api/onboard/run/$CASE_ID \
+  -H "Content-Type: application/json" \
+  -d '{"notes":"stability-gate"}' | python -m json.tool
+# Expect: {"ok": true, "plan": {...}}
+
+# Check status + riskStatus
+curl -sS http://127.0.0.1:8000/api/case/$CASE_ID | python -m json.tool
+# Expect: "status" lifecycle unchanged (ONBOARDING_IN_PROGRESS or similar)
+# Expect: "riskStatus" set to GREEN or AT_RISK
+
+# Assets: persist asset_id + verify
+export EMP_ID="..."
+curl -sS -X PUT http://127.0.0.1:8000/api/hr/employees/$EMP_ID/assets \
+  -H "Content-Type: application/json" \
+  -d '{"laptop":{"assigned":true,"model":"Dell Latitude 5440","asset_id":"LAP-DEMO-001"},"seat":{"assigned":true,"location":"HQ-3A-41"}}' | python -m json.tool
+# Expect: assets.laptop.asset_id == "LAP-DEMO-001"
+
+curl -sS http://127.0.0.1:8000/api/hr/employees | python -m json.tool
+# Expect: assets.laptop.asset_id == "LAP-DEMO-001" on the matching employee
+
+# Orchestrate endpoint single-wrap
+curl -sS -X POST http://127.0.0.1:8000/api/hr/cases/$CASE_ID/orchestrate | python -m json.tool
+# Expect: top-level keys ok + plan (no nested plan.plan)

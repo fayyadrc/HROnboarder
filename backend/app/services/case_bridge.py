@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from fastapi import HTTPException
 
@@ -24,22 +24,23 @@ def _build_seed(db_case: DbCase) -> Dict[str, Any]:
 
 def ensure_case_seeded(case_id: str) -> Dict[str, Any]:
     """
-    Ensure a case exists in the in-memory case_store.
-
-    Why this exists:
-    - The DB is authoritative for cases, codes, and status.
-    - case_store is authoritative for wizard state and agent event streaming.
-    - Curl-first endpoints must work even if /api/case/init wasn't called.
-
-    Contract:
-    - If case_store already has case_id -> return it.
-    - Else load from DB and seed case_store using stable case_id = DB Case.id.
-    - Also sync status into case_store.
+    Milestone 3 behavior:
+    1) If in-memory exists -> return.
+    2) If persisted case_state exists -> load into memory -> return.
+    3) Else seed from DB Case + ApplicationCode -> init case_store.
     """
     existing = case_store.get_case(case_id)
     if existing:
         return existing
 
+    # 1) Try persisted runtime snapshot
+    persisted = case_store.load_persisted_case(case_id)
+    if persisted:
+        loaded = case_store.set_case_direct(case_id, persisted)
+        # no emit; we don't want to spam UI on seed
+        return loaded
+
+    # 2) Fallback to DB seed
     db = SessionLocal()
     try:
         db_case = db.query(DbCase).filter(DbCase.id == case_id).first()
@@ -52,7 +53,6 @@ def ensure_case_seeded(case_id: str) -> Dict[str, Any]:
             .first()
         )
 
-        # Use application code if present (nice for traceability), otherwise use a stable unique placeholder
         application_number = active_code.code if active_code else f"CASEID-{case_id}"
 
         seeded = case_store.init_or_get_case(
@@ -61,7 +61,6 @@ def ensure_case_seeded(case_id: str) -> Dict[str, Any]:
             case_id=db_case.id,
         )
 
-        # Sync DB status into case_store
         if getattr(db_case, "status", None):
             case_store.set_status(db_case.id, db_case.status)
 
