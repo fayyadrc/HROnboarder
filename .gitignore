@@ -67,3 +67,6 @@ dist/
 .vite/
 
 .env
+
+__pycache__/
+*.pyc
