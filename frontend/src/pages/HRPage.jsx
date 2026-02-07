@@ -811,18 +811,6 @@ function CasesView({
                       {busy ? "Resuming..." : "Resume Application"}
                     </Button>
                   )}
-
-                  {/* Automate Logistics button for in-progress onboarding */}
-                  {selected.status === "ONBOARDING_IN_PROGRESS" && (
-                    <Button 
-                      onClick={() => handleRunOrchestrator(selected.id)} 
-                      disabled={busy}
-                      className="w-full bg-blue-600 hover:bg-blue-700 mt-2"
-                    >
-                      <Laptop className="w-4 h-4 mr-2" />
-                      {busy ? "Assigning Assets..." : "Automate Logistics & Provisioning"}
-                    </Button>
-                  )}
                 </div>
               </div>
             )}
