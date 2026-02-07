@@ -49,6 +49,19 @@ export function StepReview({ data, onNext, onBack, isPaused }) {
     if (!attested) return;
     setSubmitting(true);
     try {
+      // Run agents first
+      setAgentError("");
+      setRunningAgents(true);
+      try {
+        const res = await api.runAgents("Run from Submit");
+        setAgentPlan(res?.plan || null);
+      } catch (e) {
+        setAgentError(e?.message || "Failed to run agents");
+      } finally {
+        setRunningAgents(false);
+      }
+
+      // Then submit the application
       await api.setStatus("ONBOARDING_IN_PROGRESS");
       await api.submitStep("review", { attested: true, submittedAt: new Date().toISOString() }, 6);
       setSubmitted(true);
@@ -143,18 +156,16 @@ export function StepReview({ data, onNext, onBack, isPaused }) {
             label="National ID"
             value={steps.documents?.nationalId?.name || (steps.documents?.nationalId ? "Uploaded" : "-")}
           />
+          <Row
+            label="Visa"
+            value={steps.documents?.visa?.name || (steps.documents?.visa ? "Uploaded" : "-")}
+          />
         </Section>
 
         <Section title="Work Authorization">
           <Row
-            label="Location"
-            value={
-              steps.workAuth?.workCity || steps.workAuth?.workCountry
-                ? `${steps.workAuth?.workCity || ""}${steps.workAuth?.workCity && steps.workAuth?.workCountry ? ", " : ""}${
-                    steps.workAuth?.workCountry || ""
-                  }`
-                : "-"
-            }
+            label="Work Location"
+            value={steps.workAuth?.workLocation || "-"}
           />
           <Row label="Sponsorship" value={steps.workAuth?.sponsorship} />
         </Section>

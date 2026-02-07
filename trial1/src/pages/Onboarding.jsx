@@ -2,8 +2,14 @@ import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { WizardShell } from "@/components/WizardShell";
 import { api } from "@/lib/mockApi";
-import { Loader2 } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Loader2, Clock, AlertCircle } from "lucide-react";
+import { 
+  Dialog, 
+  DialogContent, 
+  DialogHeader, 
+  DialogTitle, 
+  DialogDescription 
+} from "@/components/ui/dialog";
 
 // Steps
 import { StepWelcome } from "@/steps/StepWelcome";
@@ -114,18 +120,62 @@ export function OnboardingPage() {
   ];
 
   const CurrentStepComponent = stepsComponents[caseData.currentStepIndex] || StepReview;
-  const isPaused = ["NEGOTIATION_PENDING", "ON_HOLD_HR"].includes(caseData.status);
+  const isPaused = ["NEGOTIATION_PENDING", "ON_HOLD_HR", "PAUSED_BY_HR"].includes(caseData.status);
+  const isDeclined = caseData.status === "DECLINED";
+
+  // Declined state view - show thank you message
+  if (isDeclined) {
+    return (
+      <WizardShell currentStep={caseData.currentStepIndex} isDeclined={true}>
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="text-center max-w-md mx-auto p-8 bg-white rounded-lg shadow-md border border-gray-100">
+            <div className="w-16 h-16 mx-auto mb-6 bg-gray-100 rounded-full flex items-center justify-center">
+              <svg className="w-8 h-8 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <h2 className="text-2xl font-semibold text-gray-900 mb-3">Thank You for Contacting Us</h2>
+            <p className="text-gray-600 mb-6">
+              We appreciate you taking the time to consider this opportunity. 
+              If you change your mind or have any questions, please don't hesitate to reach out to our HR team.
+            </p>
+            <p className="text-sm text-gray-500">
+              We wish you the best in your future endeavors.
+            </p>
+          </div>
+        </div>
+      </WizardShell>
+    );
+  }
 
   return (
-    <WizardShell currentStep={caseData.currentStepIndex}>
-      {isPaused && (
-        <Alert className="mb-6 border-amber-200 bg-amber-50 text-amber-900">
-          <AlertTitle>Application Paused</AlertTitle>
-          <AlertDescription>
-            We have notified HR with your request. You can review your details while we wait.
-          </AlertDescription>
-        </Alert>
-      )}
+    <WizardShell currentStep={caseData.currentStepIndex} isDeclined={false} isPaused={isPaused}>
+      {/* Paused State Modal - Blocking modal that prevents user interaction */}
+      <Dialog open={isPaused}>
+        <DialogContent hideCloseButton preventClose>
+          <DialogHeader>
+            <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-amber-100 rounded-full">
+              <Clock className="w-6 h-6 text-amber-600" />
+            </div>
+            <DialogTitle className="text-center">Application Paused</DialogTitle>
+            <DialogDescription className="text-center pt-2">
+              Your application has been temporarily paused by HR. This may be due to:
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="my-4 space-y-2 text-sm text-gray-600">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
+              <span>HR team reviewing your request or concerns</span>
+            </div>
+          </div>
+          
+          <p className="text-sm text-gray-500 text-center">
+            Please wait while HR reviews your application. 
+            You will be notified when your application resumes.
+          </p>
+        </DialogContent>
+      </Dialog>
 
       <CurrentStepComponent 
         data={caseData} 

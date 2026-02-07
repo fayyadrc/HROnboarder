@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from app.db.database import SessionLocal
 from app.db.models import HRUser, Case, ApplicationCode
+from app.store.case_store import case_store
 
 router = APIRouter(prefix="/api/hr", tags=["HR"])
 
@@ -101,6 +102,11 @@ def list_cases(db: Session = Depends(get_db)):
                 )
                 .first()
             )
+            
+            # Get wizard data from case_store if available
+            wizard_data = case_store.get_case(c.id)
+            offer_step = wizard_data.get("steps", {}).get("offer", {}) if wizard_data else {}
+            
             result.append({
                 "id": c.id,
                 "candidate_name": c.candidate_name,
@@ -112,9 +118,104 @@ def list_cases(db: Session = Depends(get_db)):
                 "benefits": c.benefits,
                 "prior_notes": c.prior_notes,
                 "status": c.status,
-                "applicationCode": code.code if code else None
+                "applicationCode": code.code if code else None,
+                # Include candidate feedback from wizard
+                "candidate_decision": offer_step.get("decision"),
+                "candidate_concerns": offer_step.get("concerns"),
+                "salary_appeal": offer_step.get("salaryAppeal"),
             })
         return result
     except Exception:
         db.rollback()
         raise
+
+
+@router.put("/cases/{case_id}")
+def update_case(case_id: str, payload: dict, db: Session = Depends(get_db)):
+    """Update case details."""
+    try:
+        c = db.query(Case).filter(Case.id == case_id).first()
+        if not c:
+            raise HTTPException(status_code=404, detail="Case not found")
+
+        # Update allowed fields
+        if "candidate_name" in payload:
+            c.candidate_name = payload["candidate_name"]
+        if "role" in payload:
+            c.role = payload["role"]
+        if "nationality" in payload:
+            c.nationality = payload["nationality"]
+        if "work_location" in payload:
+            c.work_location = payload["work_location"]
+        if "start_date" in payload:
+            c.start_date = payload["start_date"]
+        if "salary" in payload:
+            c.salary = payload["salary"]
+        if "benefits" in payload:
+            c.benefits = payload["benefits"]
+        if "prior_notes" in payload:
+            c.prior_notes = payload["prior_notes"]
+
+        db.commit()
+        return {"ok": True, "case_id": case_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/cases/{case_id}")
+def delete_case(case_id: str, db: Session = Depends(get_db)):
+    try:
+        # Find the case
+        c = db.query(Case).filter(Case.id == case_id).first()
+        if not c:
+            raise HTTPException(status_code=404, detail="Case not found")
+
+        # Delete associated application codes first
+        db.query(ApplicationCode).filter(ApplicationCode.case_id == case_id).delete()
+
+        # Delete the case from database
+        db.delete(c)
+        db.commit()
+
+        # Also clean up in-memory store
+        case_store.delete_case(case_id)
+
+        return {"ok": True, "deleted": case_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cases/{case_id}/resume")
+def resume_case(case_id: str, db: Session = Depends(get_db)):
+    """HR resumes a paused application, allowing candidate to continue."""
+    try:
+        # Update database
+        c = db.query(Case).filter(Case.id == case_id).first()
+        if not c:
+            raise HTTPException(status_code=404, detail="Case not found")
+        
+        # Set status to ONBOARDING_IN_PROGRESS and advance to next step
+        c.status = "ONBOARDING_IN_PROGRESS"
+        db.commit()
+
+        # Update in-memory store
+        case_store.set_status(case_id, "ONBOARDING_IN_PROGRESS")
+        
+        # Advance the step from offer (1) to identity (2)
+        wizard_data = case_store.get_case(case_id)
+        if wizard_data and wizard_data.get("currentStepIndex", 0) == 1:
+            wizard_data["currentStepIndex"] = 2
+            wizard_data["status"] = "ONBOARDING_IN_PROGRESS"
+
+        return {"ok": True, "case_id": case_id, "status": "ONBOARDING_IN_PROGRESS"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))

@@ -5,7 +5,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
-import { hrLogin, createCase, generateApplicationCode, listCases } from "@/lib/mockApi";
+import { hrLogin, createCase, generateApplicationCode, listCases, deleteCase, resumeCase, updateCase } from "@/lib/mockApi";
+import { Trash2, Play, Pencil } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 
 export function HRPage() {
   const [authed, setAuthed] = useState(false);
@@ -25,10 +27,13 @@ export function HRPage() {
     benefits: {},
     prior_notes: ""
   });
+  const [startDateError, setStartDateError] = useState(null);
 
   const [cases, setCases] = useState([]);
   const [selectedCaseId, setSelectedCaseId] = useState(null);
   const [generatedCode, setGeneratedCode] = useState(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState({});
 
   const loadCases = async () => {
     try {
@@ -42,6 +47,29 @@ export function HRPage() {
   useEffect(() => {
     if (authed) loadCases();
   }, [authed]);
+
+  // Validate start date is not before current date
+  const validateStartDate = (dateString) => {
+    if (!dateString) {
+      setStartDateError(null);
+      return true;
+    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const selectedDate = new Date(dateString);
+    if (selectedDate < today) {
+      setStartDateError("Start date cannot be before today");
+      return false;
+    }
+    setStartDateError(null);
+    return true;
+  };
+
+  const handleStartDateChange = (e) => {
+    const newDate = e.target.value;
+    setForm((p) => ({ ...p, start_date: newDate }));
+    validateStartDate(newDate);
+  };
 
   const onAuth = async (e) => {
     e.preventDefault();
@@ -60,6 +88,12 @@ export function HRPage() {
 
   const onCreate = async (e) => {
     e.preventDefault();
+    
+    // Validate start date before submission
+    if (form.start_date && !validateStartDate(form.start_date)) {
+      return;
+    }
+    
     setBusy(true);
     setAuthErr(null);
     setGeneratedCode(null);
@@ -78,6 +112,7 @@ export function HRPage() {
         benefits: {},
         prior_notes: ""
       });
+      setStartDateError(null);
     } catch (err) {
       setAuthErr(err?.message || "Case creation failed");
     } finally {
@@ -97,6 +132,39 @@ export function HRPage() {
       await loadCases();
     } catch (err) {
       setAuthErr(err?.message || "Code generation failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onDelete = async (caseId, e) => {
+    e.stopPropagation(); // Prevent selecting the case
+    if (!confirm("Are you sure you want to delete this case?")) return;
+    setBusy(true);
+    setAuthErr(null);
+    try {
+      await deleteCase(caseId);
+      if (selectedCaseId === caseId) {
+        setSelectedCaseId(null);
+        setGeneratedCode(null);
+      }
+      await loadCases();
+    } catch (err) {
+      setAuthErr(err?.message || "Failed to delete case");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onResume = async () => {
+    if (!selectedCaseId) return;
+    setBusy(true);
+    setAuthErr(null);
+    try {
+      await resumeCase(selectedCaseId);
+      await loadCases();
+    } catch (err) {
+      setAuthErr(err?.message || "Failed to resume case");
     } finally {
       setBusy(false);
     }
@@ -187,7 +255,16 @@ export function HRPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-2">
                       <Label>Start Date</Label>
-                      <Input type="date" value={form.start_date} onChange={(e) => setForm((p) => ({ ...p, start_date: e.target.value }))} placeholder="2026-03-01" />
+                      <Input 
+                        type="date" 
+                        value={form.start_date} 
+                        onChange={handleStartDateChange} 
+                        min={new Date().toISOString().split('T')[0]}
+                        placeholder="2026-03-01" 
+                      />
+                      {startDateError && (
+                        <p className="text-xs text-red-500">{startDateError}</p>
+                      )}
                     </div>
                     <div className="space-y-2">
                       <Label>Salary</Label>
@@ -231,45 +308,100 @@ export function HRPage() {
                         <div className="p-4 text-sm text-gray-500">No cases yet.</div>
                       ) : (
                         cases.map((c) => (
-                          <button
+                          <div
                             key={c.id}
                             onClick={() => {
                               setSelectedCaseId(c.id);
                               setGeneratedCode(null);
                             }}
-                            className={`w-full text-left px-4 py-3 border-b last:border-b-0 hover:bg-gray-50 ${
+                            className={`w-full text-left px-4 py-3 border-b last:border-b-0 hover:bg-gray-50 cursor-pointer ${
                               selectedCaseId === c.id ? "bg-gray-50" : ""
                             }`}
                           >
-                            <div className="text-sm font-semibold text-gray-900">
-                              {c.candidate_name || "Unnamed Candidate"}
-                            </div>
-                            <div className="text-xs text-gray-500">
-                              {c.id} • {c.role || "No role"} • {c.status || "DRAFT"}
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm font-semibold text-gray-900">
+                                  {c.candidate_name || "Unnamed Candidate"}
+                                </div>
+                                <div className="text-xs text-gray-500 truncate">
+                                  {c.id} • {c.role || "No role"}
+                                </div>
+                              </div>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={(e) => onDelete(c.id, e)}
+                                className="text-gray-400 hover:text-red-600 hover:bg-red-50 h-8 w-8 p-0"
+                                title="Delete case"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
                             </div>
                             <div className="mt-2">
-                              <Badge variant="secondary">{c.status || "DRAFT"}</Badge>
+                              <Badge variant={
+                                c.status === "DECLINED" ? "destructive" :
+                                c.status?.includes("PROGRESS") || c.status === "ONBOARDING_IN_PROGRESS" ? "success" :
+                                c.status === "ON_HOLD_HR" || c.status === "ON_HOLD" || c.status === "NEGOTIATION_PENDING" ? "warning" :
+                                "secondary"
+                              }>
+                                {c.status || "DRAFT"}
+                              </Badge>
                             </div>
-                          </button>
+                          </div>
                         ))
                       )}
                     </div>
                   </div>
 
                   <div className="border rounded-lg bg-white">
-                    <div className="px-4 py-3 border-b text-sm font-medium text-gray-700">
-                      Case Details
+                    <div className="px-4 py-3 border-b text-sm font-medium text-gray-700 flex items-center justify-between">
+                      <span>Case Details</span>
+                      {selected && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 w-7 p-0"
+                          onClick={() => {
+                            setEditForm({
+                              candidate_name: selected.candidate_name || "",
+                              role: selected.role || "",
+                              nationality: selected.nationality || "",
+                              work_location: selected.work_location || "",
+                              salary: selected.salary || "",
+                            });
+                            setEditOpen(true);
+                          }}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      )}
                     </div>
                     <div className="p-4 space-y-3">
                       {!selected ? (
                         <div className="text-sm text-gray-500">Select a case to view details.</div>
                       ) : (
                         <>
-                          <div className="text-sm">
-                            <div className="text-xs text-gray-500">Candidate</div>
-                            <div className="font-medium">{selected.candidate_name}</div>
-                          </div>
                           <div className="grid grid-cols-2 gap-3 text-sm">
+                            <div>
+                              <div className="text-xs text-gray-500">Candidate</div>
+                              <div className="font-medium">{selected.candidate_name}</div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-500">Application Code</div>
+                              <div className="font-mono font-medium text-green-700">
+                                {selected.applicationCode || (
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline" 
+                                    onClick={onGenerate} 
+                                    disabled={busy}
+                                    className="h-6 px-2 text-xs"
+                                  >
+                                    Generate
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
                             <div>
                               <div className="text-xs text-gray-500">Role</div>
                               <div className="font-medium">{selected.role || "-"}</div>
@@ -290,24 +422,43 @@ export function HRPage() {
 
                           <Separator />
 
-                          {!selected.applicationCode ? (
-                            <Button onClick={onGenerate} disabled={busy} className="w-full">
-                              {busy ? "Generating..." : "Generate Application Code"}
-                            </Button>
-                          ) : (
-                            <div className="text-xs text-gray-600">Application code already generated.</div>
+                          {/* Candidate Feedback Section */}
+                          {(selected.candidate_concerns || selected.salary_appeal) && (
+                            <div className="space-y-3">
+                              <div className="text-sm font-medium text-gray-700">Candidate Feedback</div>
+                              
+                              {selected.candidate_concerns && (
+                                <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+                                  <div className="text-xs text-amber-700 font-medium">Concerns</div>
+                                  <div className="text-sm text-amber-900 mt-1">
+                                    {selected.candidate_concerns}
+                                  </div>
+                                </div>
+                              )}
+                              
+                              {selected.salary_appeal && (
+                                <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
+                                  <div className="text-xs text-blue-700 font-medium">Salary Appeal</div>
+                                  <div className="text-sm text-blue-900 mt-1">
+                                    {selected.salary_appeal}
+                                  </div>
+                                </div>
+                              )}
+                              
+                              <Separator />
+                            </div>
                           )}
 
-                          {(generatedCode || selected.applicationCode) && (
-                            <div className="rounded-md border border-green-200 bg-green-50 p-3">
-                              <div className="text-xs text-green-700">Application Code</div>
-                              <div className="font-mono text-lg font-semibold text-green-900">
-                                {generatedCode || selected.applicationCode}
-                              </div>
-                              <div className="text-xs text-green-700 mt-1">
-                                Candidate enters this on the main login page.
-                              </div>
-                            </div>
+                          {/* Resume button for paused applications */}
+                          {(selected.status === "ON_HOLD_HR" || selected.status === "ON_HOLD") && (
+                            <Button 
+                              onClick={onResume} 
+                              disabled={busy} 
+                              className="w-full bg-green-600 hover:bg-green-700"
+                            >
+                              <Play className="w-4 h-4 mr-2" />
+                              {busy ? "Resuming..." : "Resume Application"}
+                            </Button>
                           )}
                         </>
                       )}
@@ -322,6 +473,75 @@ export function HRPage() {
             </Card>
           </div>
         )}
+
+        {/* Edit Case Dialog */}
+        <Dialog open={editOpen} onOpenChange={setEditOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Edit Case Details</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label>Candidate Name</Label>
+                <Input
+                  value={editForm.candidate_name || ""}
+                  onChange={(e) => setEditForm((p) => ({ ...p, candidate_name: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Role</Label>
+                <Input
+                  value={editForm.role || ""}
+                  onChange={(e) => setEditForm((p) => ({ ...p, role: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Nationality</Label>
+                <Input
+                  value={editForm.nationality || ""}
+                  onChange={(e) => setEditForm((p) => ({ ...p, nationality: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Work Location</Label>
+                <Input
+                  value={editForm.work_location || ""}
+                  onChange={(e) => setEditForm((p) => ({ ...p, work_location: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Salary</Label>
+                <Input
+                  value={editForm.salary || ""}
+                  onChange={(e) => setEditForm((p) => ({ ...p, salary: e.target.value }))}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={async () => {
+                  if (!selected) return;
+                  setBusy(true);
+                  try {
+                    await updateCase(selected.id, editForm);
+                    await loadCases();
+                    setEditOpen(false);
+                  } catch (e) {
+                    console.error(e);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                disabled={busy}
+              >
+                {busy ? "Saving..." : "Save Changes"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </main>
     </div>
   );

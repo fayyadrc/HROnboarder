@@ -1,5 +1,6 @@
 import React from 'react';
 import { cn } from "@/lib/utils";
+import { PauseCircle } from "lucide-react";
 
 const steps = [
   { label: "Welcome", id: 0 },
@@ -11,17 +12,31 @@ const steps = [
   { label: "Review", id: 6 },
 ];
 
-export function BottomProgress({ currentStep }) {
+export function BottomProgress({ currentStep, isPaused = false }) {
   // Calculate percentage: (current / total-1) * 100
   const progress = Math.min(100, Math.max(0, (currentStep / (steps.length - 1)) * 100));
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-4 md:px-8 z-50">
+    <div className={cn(
+      "fixed bottom-0 left-0 right-0 border-t p-4 md:px-8 z-50",
+      isPaused ? "bg-amber-50 border-amber-200" : "bg-white border-gray-200"
+    )}>
       <div className="max-w-4xl mx-auto space-y-2">
+        {/* Paused indicator */}
+        {isPaused && (
+          <div className="flex items-center justify-center gap-2 text-amber-700 text-sm font-medium pb-2">
+            <PauseCircle className="w-4 h-4" />
+            <span>Application Paused — Waiting for HR Review</span>
+          </div>
+        )}
+        
         {/* Progress Bar */}
         <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
           <div 
-            className="h-full bg-primary transition-all duration-500 ease-in-out"
+            className={cn(
+              "h-full transition-all duration-500 ease-in-out",
+              isPaused ? "bg-amber-500" : "bg-primary"
+            )}
             style={{ width: `${progress}%` }}
           />
         </div>
@@ -33,7 +48,7 @@ export function BottomProgress({ currentStep }) {
               key={step.id} 
               className={cn(
                 "transition-colors duration-300",
-                step.id === currentStep && "text-primary font-bold",
+                step.id === currentStep && (isPaused ? "text-amber-700 font-bold" : "text-primary font-bold"),
                 step.id < currentStep && "text-gray-900"
               )}
             >
