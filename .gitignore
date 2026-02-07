@@ -66,3 +66,7 @@ node_modules/
 dist/
 .vite/
 
+.env
+
+__pycache__/
+*.pyc

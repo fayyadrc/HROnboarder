@@ -40,14 +40,12 @@ class ITProvisioningAgent(BaseAgent):
         work_location = seed.get("workLocation") or ""
         start_date = seed.get("startDate")
 
-        # HRIS output must exist to provision IT properly
         hris_out = ((case.get("agentOutputs") or {}).get("hris") or {}).get("data") or {}
         employee_id = hris_out.get("employeeId")
 
         risks: List[str] = []
         if not employee_id:
             risks.append("Missing employeeId (HRIS not completed). IT provisioning cannot proceed.")
-
             return AgentResult(
                 agent=self.name,
                 summary="IT provisioning blocked: HRIS employeeId missing.",
@@ -56,29 +54,42 @@ class ITProvisioningAgent(BaseAgent):
                 data={"blocked": True},
             )
 
-        bundle = equipment_bundle_by_role(role)
+        # Workplace decision (if present) overrides IT fallback bundle model
+        workplace_equipment = (
+            ((case.get("agentOutputs") or {}).get("workplace") or {}).get("data") or {}
+        ).get("equipment") or {}
+        workplace_model = workplace_equipment.get("deviceModel")
+
+        it_bundle = equipment_bundle_by_role(role)  # fallback
         delivery = it_delivery_days_for_location(work_location)
         groups = access_groups_by_role(role)
         tickets = ticket_templates()
+
+        device_model = workplace_model or it_bundle.get("model")
+        accessories = workplace_equipment.get("accessories") or it_bundle.get("accessories") or []
 
         # SLA risk: device delivery after start date (or too close to start)
         days_to_start = _days_until(start_date)
         sla_risks = []
         if days_to_start is not None:
             if delivery > days_to_start:
-                sla_risks.append({
-                    "code": "DEVICE_AFTER_START",
-                    "severity": 8,
-                    "message": f"Device delivery ({delivery} days) is after start date (in {days_to_start} days).",
-                    "mitigation": "Expedite shipment, issue loaner device, or adjust start date.",
-                })
+                sla_risks.append(
+                    {
+                        "code": "DEVICE_AFTER_START",
+                        "severity": 8,
+                        "message": f"Device delivery ({delivery} days) is after start date (in {days_to_start} days).",
+                        "mitigation": "Expedite shipment, issue loaner device, or adjust start date.",
+                    }
+                )
             elif delivery >= max(0, days_to_start - 1):
-                sla_risks.append({
-                    "code": "DEVICE_TIGHT_SLA",
-                    "severity": 5,
-                    "message": f"Device delivery SLA is tight: {delivery} days, start date in {days_to_start} days.",
-                    "mitigation": "Confirm stock and shipment; prepare fallback device.",
-                })
+                sla_risks.append(
+                    {
+                        "code": "DEVICE_TIGHT_SLA",
+                        "severity": 5,
+                        "message": f"Device delivery SLA is tight: {delivery} days, start date in {days_to_start} days.",
+                        "mitigation": "Confirm stock and shipment; prepare fallback device.",
+                    }
+                )
 
         if sla_risks:
             risks.append("IT SLA risk detected for device provisioning.")
@@ -86,14 +97,16 @@ class ITProvisioningAgent(BaseAgent):
         actions = [
             {"type": "CREATE_TICKETS", "count": len(tickets)},
             {"type": "ASSIGN_ACCESS_GROUPS", "groups": groups},
-            {"type": "REQUEST_DEVICE", "model": bundle["model"], "deliveryDays": delivery},
+            {"type": "REQUEST_DEVICE", "model": device_model, "deliveryDays": delivery},
         ]
+        if workplace_model:
+            actions.append({"type": "DEVICE_SOURCE_OF_TRUTH", "source": "WORKPLACE", "model": workplace_model})
         if sla_risks:
             actions.append({"type": "SLA_RISKS", "risks": sla_risks})
 
         summary = (
             f"IT provisioning planned for {employee_id}. "
-            f"Device: {bundle['model']} (delivery {delivery} days). "
+            f"Device: {device_model} (delivery {delivery} days). "
             f"Tickets: {len(tickets)}. Groups: {len(groups)}."
         )
 
@@ -104,7 +117,7 @@ class ITProvisioningAgent(BaseAgent):
             actions=actions,
             data={
                 "employeeId": employee_id,
-                "deviceRequest": {"model": bundle["model"], "accessories": bundle["accessories"], "deliveryDays": delivery},
+                "deviceRequest": {"model": device_model, "accessories": accessories, "deliveryDays": delivery},
                 "tickets": tickets,
                 "accessGroups": groups,
                 "slaRisks": sla_risks,
