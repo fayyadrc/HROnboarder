@@ -147,3 +147,143 @@ export const resumeCase = async (caseId) => {
 export const updateCase = async (caseId, payload) => {
   return jsonFetch(`/api/hr/cases/${caseId}`, { method: "PUT", body: JSON.stringify(payload) });
 };
+
+// Orchestrator - triggers AI agents to assign laptops and desks
+export const runOrchestrator = async (caseId) => {
+  return jsonFetch(`/api/hr/cases/${caseId}/orchestrate`, { method: "POST" });
+};
+
+// Employee-related API calls
+export const listEmployees = async () => {
+  try {
+    return await jsonFetch("/api/hr/employees", { method: "GET" });
+  } catch (e) {
+    // Return mock data if backend endpoint is not available
+    console.warn("Employees endpoint not available, using mock data");
+    return getMockEmployees();
+  }
+};
+
+export const getEmployeeDetails = async (employeeId) => {
+  try {
+    return await jsonFetch(`/api/hr/employees/${employeeId}`, { method: "GET" });
+  } catch (e) {
+    // Return mock data if backend endpoint is not available
+    console.warn("Employee details endpoint not available, using mock data");
+    const employees = getMockEmployees();
+    return employees.find((emp) => emp.employee_id === employeeId) || null;
+  }
+};
+
+// Mock employee data for development
+const getMockEmployees = () => [
+  {
+    employee_id: "EMP-001",
+    case_id: "case-abc123",
+    full_name: "Rikhil Sharma",
+    email: "rikhil.sharma@company.com",
+    department: "Engineering",
+    role: "Software Engineer",
+    start_date: "2026-03-01",
+    status: "ONBOARDING_IN_PROGRESS",
+    steps: {
+      offer: { decision: "ACCEPTED" },
+      identity: {
+        fullName: "Rikhil Sharma",
+        email: "rikhil.sharma@company.com",
+        phone: "+971 50 123 4567",
+        country: "India"
+      },
+      documents: {
+        passport: { name: "passport_rikhil.pdf", size: 245000, status: "verified" },
+        nationalId: { name: "national_id_rikhil.pdf", size: 180000, status: "verified" },
+        visa: { name: "visa_rikhil.pdf", size: 120000, status: "pending" }
+      },
+      workAuth: {
+        workLocation: "Dubai, UAE",
+        sponsorship: "Required"
+      }
+    },
+    assets: {
+      laptop: { assigned: true, model: "MacBook Pro 14 inch", asset_id: "LAP-2026-0042" },
+      seat: { assigned: true, location: "Floor 3, Desk 12B" }
+    }
+  },
+  {
+    employee_id: "EMP-002",
+    case_id: "case-def456",
+    full_name: "Sarah Johnson",
+    email: "sarah.johnson@company.com",
+    department: "Marketing",
+    role: "Marketing Manager",
+    start_date: "2026-03-15",
+    status: "SUBMITTED_FOR_HR_REVIEW",
+    steps: {
+      offer: { decision: "ACCEPTED" },
+      identity: {
+        fullName: "Sarah Johnson",
+        email: "sarah.johnson@company.com",
+        phone: "+1 555 123 4567",
+        country: "USA"
+      },
+      documents: {
+        passport: { name: "passport_sarah.pdf", size: 280000, status: "verified" },
+        nationalId: { name: "license_sarah.pdf", size: 150000, status: "verified" },
+        visa: null
+      },
+      workAuth: {
+        workLocation: "New York, USA",
+        sponsorship: "Not Required"
+      }
+    },
+    assets: {
+      laptop: { assigned: false, model: null, asset_id: null },
+      seat: { assigned: false, location: null }
+    }
+  },
+  {
+    employee_id: "EMP-003",
+    case_id: "case-ghi789",
+    full_name: "Ahmed Al-Rashid",
+    email: "ahmed.rashid@company.com",
+    department: "Finance",
+    role: "Financial Analyst",
+    start_date: "2026-02-20",
+    status: "ONBOARDING_COMPLETE",
+    steps: {
+      offer: { decision: "ACCEPTED" },
+      identity: {
+        fullName: "Ahmed Al-Rashid",
+        email: "ahmed.rashid@company.com",
+        phone: "+971 55 987 6543",
+        country: "UAE"
+      },
+      documents: {
+        passport: { name: "passport_ahmed.pdf", size: 210000, status: "verified" },
+        nationalId: { name: "emirates_id_ahmed.pdf", size: 195000, status: "verified" },
+        visa: null
+      },
+      workAuth: {
+        workLocation: "Abu Dhabi, UAE",
+        sponsorship: "Not Required"
+      }
+    },
+    assets: {
+      laptop: { assigned: true, model: "Dell XPS 15", asset_id: "LAP-2026-0038" },
+      seat: { assigned: true, location: "Floor 2, Desk 5A" }
+    }
+  }
+];
+
+// Update employee assets (laptop/seat)
+export const updateEmployeeAssets = async (employeeId, assets) => {
+  try {
+    return await jsonFetch(`/api/hr/employees/${employeeId}/assets`, {
+      method: "PUT",
+      body: JSON.stringify(assets)
+    });
+  } catch (e) {
+    console.warn("Employee assets endpoint not available, returning mock response");
+    return { success: true, employeeId, assets };
+  }
+};
