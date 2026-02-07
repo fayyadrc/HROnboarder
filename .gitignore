@@ -1,0 +1,53 @@
+backend/app/db/__pycache__/models.cpython-312.pyc
+backend/hr_automator.db
+backend/app/__pycache__/main.cpython-312.pyc
+backend/app/routes/__pycache__/hr.cpython-312.pyc
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Local DB/runtime artifacts
+*.db
+backend/*.db
+
+# OS/IDE
+.DS_Store
+.vscode/
+.idea/
+
+
+/home/user_rik/dev/projects/HROnboarder/backend/app/services/__pycache__/*
+/home/user_rik/dev/projects/HROnboarder/backend/app/routes/__pycache__/*
+/home/user_rik/dev/projects/HROnboarder/backend/app/models/__pycache__/*
+/home/user_rik/dev/projects/HROnboarder/backend/app/controllers/__pycache__/*
+/home/user_rik/dev/projects/HROnboarder/backend/app/services/__pycache__/orchestrator_service.cpython-312.pyc
+/home/user_rik/dev/projects/HROnboarder/backend/hr_automator.db
+backend/app/services/__pycache__/orchestrator_service.cpython-312.pyc
+
+
