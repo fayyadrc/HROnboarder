@@ -4,20 +4,19 @@ import asyncio
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from app.store.case_store import case_store
-
 from app.agents.compliance_agent import ComplianceAgent
-from app.agents.logistics_agent import LogisticsAgent
 from app.agents.hris_agent import HRISAgent
 from app.agents.it_agent import ITProvisioningAgent
-
+from app.agents.logistics_agent import LogisticsAgent
+from app.agents.workplace_agent import WorkplaceServicesAgent
 from app.db.database import SessionLocal
 from app.db.models import Case as DbCase
-
+from app.store.case_store import case_store
 
 compliance_agent = ComplianceAgent()
 logistics_agent = LogisticsAgent()
 hris_agent = HRISAgent()
+workplace_agent = WorkplaceServicesAgent()
 it_agent = ITProvisioningAgent()
 
 
@@ -45,6 +44,13 @@ def _has_hris(case: Dict[str, Any]) -> bool:
     return bool(h.get("employeeId"))
 
 
+def _has_workplace(case: Dict[str, Any]) -> bool:
+    w = ((case.get("agentOutputs") or {}).get("workplace") or {}).get("data") or {}
+    seating = w.get("seating") or {}
+    equipment = w.get("equipment") or {}
+    return bool(seating.get("seatId")) and bool(equipment.get("bundleName"))
+
+
 def _has_it(case: Dict[str, Any]) -> bool:
     it = ((case.get("agentOutputs") or {}).get("it") or {}).get("data") or {}
     tickets = it.get("tickets") or []
@@ -67,17 +73,6 @@ def detect_conflicts(
     visa_weeks = ((compliance_out.get("data") or {}).get("visaTimelineWeeks")) or 0
     delivery_days = ((logistics_out.get("data") or {}).get("deliveryDays")) or 0
 
-    # Demo conflict: Visa long but laptop arriving quickly -> “wasted” provisioning / timing mismatch
-    if visa_weeks >= 8 and delivery_days <= 3:
-        conflicts.append(
-            {
-                "type": "TIMELINE_MISMATCH",
-                "severity": 6,
-                "message": "Visa timeline is long but laptop is scheduled to arrive immediately. Risk: idle asset + wasted effort.",
-                "suggestedResolution": "Delay IT provisioning until visa milestone OR issue temporary virtual desktop access.",
-            }
-        )
-
     # Start-date feasibility risk (visa)
     if days_to_start is not None:
         visa_days = int(visa_weeks) * 7
@@ -96,7 +91,7 @@ def detect_conflicts(
                 {
                     "type": "DEVICE_AFTER_START_RISK",
                     "severity": 8,
-                    "message": f"Laptop delivery ({delivery_days} days) exceeds time until start date ({days_to_start} days).",
+                    "message": f"Device delivery ({delivery_days} days) exceeds time until start date ({days_to_start} days).",
                     "suggestedResolution": "Expedite delivery, issue loaner device, or delay start date.",
                 }
             )
@@ -106,7 +101,7 @@ def detect_conflicts(
     for r in sla_risks:
         conflicts.append(
             {
-                "type": r.get("type") or "IT_SLA_RISK",
+                "type": r.get("code") or "IT_SLA_RISK",
                 "severity": int(r.get("severity") or 5),
                 "message": r.get("message") or "IT SLA risk detected.",
                 "suggestedResolution": r.get("mitigation") or "Review IT provisioning plan and mitigate.",
@@ -117,9 +112,6 @@ def detect_conflicts(
 
 
 def _persist_status(case_id: str, new_status: str) -> None:
-    """
-    Persist status to DB and keep case_store in sync.
-    """
     db = SessionLocal()
     try:
         db_case = db.query(DbCase).filter(DbCase.id == case_id).first()
@@ -132,18 +124,76 @@ def _persist_status(case_id: str, new_status: str) -> None:
     case_store.set_status(case_id, new_status)
 
 
+def _decision_for_conflicts(case: Dict[str, Any], conflicts: list[dict], compliance_out: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Convert conflicts into decision-ready output for judges.
+    """
+    seed = case.get("seed", {}) or {}
+    start_date = seed.get("startDate")
+    days_to_start = _days_until(start_date)
+
+    visa_weeks = int(((compliance_out.get("data") or {}).get("visaTimelineWeeks")) or 0)
+    visa_days = visa_weeks * 7
+
+    if not conflicts:
+        return {
+            "primaryRecommendation": "PROCEED",
+            "options": [],
+            "impact": "Day-1 readiness is achievable with current plan.",
+            "rationale": "No blocking conflicts detected across compliance, workplace, logistics, and IT.",
+        }
+
+    # Default options (demo-safe, actionable)
+    options = ["DELAY_START_DATE", "EXPEDITE_VISA", "REMOTE_START_TEMP"]
+
+    # Pick a primary based on the most severe conflict type
+    primary = "REVIEW_REQUIRED"
+    impact = "Day-1 cannot be met unless action is taken."
+    rationale = "One or more risks exceed the start-date window."
+
+    types = {c.get("type") for c in conflicts}
+
+    if "VISA_BEFORE_START_RISK" in types:
+        if days_to_start is not None and visa_days > days_to_start:
+            primary = "EXPEDITE_VISA"
+            impact = f"Day-1 is at risk: visa estimate {visa_weeks} weeks exceeds time to start ({days_to_start} days)."
+            rationale = "Visa timeline is the critical path. Expedite or adjust start mode/date."
+
+            # If the gap is very large, remote start becomes the most realistic “wow” option
+            if (visa_days - days_to_start) >= 7:
+                primary = "REMOTE_START_TEMP"
+                rationale = "Remote start is the fastest path to productivity while visa is processed."
+
+    elif "DEVICE_AFTER_START_RISK" in types:
+        primary = "ISSUE_LOANER_DEVICE"
+        options = ["EXPEDITE_DEVICE", "ISSUE_LOANER_DEVICE", "DELAY_START_DATE"]
+        impact = "Day-1 is at risk due to device delivery after start date."
+        rationale = "Device availability is required for day-1 productivity."
+
+    return {
+        "primaryRecommendation": primary,
+        "options": options,
+        "impact": impact,
+        "rationale": rationale,
+    }
+
+
 async def run_orchestrator_for_case(case_id: str, notes: str = "") -> Dict[str, Any]:
     """
-    Orchestrator:
-    - Compliance + Logistics run in parallel
-    - HRIS runs next (DB-backed, idempotent)
-    - IT runs last (needs employeeId; deterministic plan)
-    - Conflicts detected and emitted
-    - READY_FOR_DAY1 set when safe
+    Orchestrator (Milestone 2 + 3.1):
+    - Compliance + Logistics in parallel
+    - HRIS (DB-backed, idempotent)
+    - Workplace Services (equipment + seating) with DB idempotency
+    - IT provisioning last (needs employeeId)
+    - Detect conflicts
+    - Always sets case status to READY_FOR_DAY1 or AT_RISK after run (demo clarity)
     """
     case = case_store.get_case(case_id)
     if not case:
         return {"error": "Case not found"}
+
+    # For demo clarity: once orchestrator runs, we are in-progress (even if candidate never submitted)
+    _persist_status(case_id, "ONBOARDING_IN_PROGRESS")
 
     case_store.emit(case_id, "agent.orchestrator_start", {"msg": "Orchestrator starting agents..."})
 
@@ -174,7 +224,7 @@ async def run_orchestrator_for_case(case_id: str, notes: str = "") -> Dict[str, 
     case_store.emit(case_id, "agent.compliance_done", {"summary": compliance_res.summary, "risks": compliance_res.risks})
     case_store.emit(case_id, "agent.logistics_done", {"summary": logistics_res.summary, "risks": logistics_res.risks})
 
-    # Sequential: HRIS (DB-backed) — skip if already present
+    # HRIS — skip if present
     case = case_store.get_case(case_id) or case
     if _has_hris(case):
         case_store.emit(case_id, "agent.hris_skipped", {"msg": "HRIS already present; skipping."})
@@ -194,17 +244,26 @@ async def run_orchestrator_for_case(case_id: str, notes: str = "") -> Dict[str, 
             "data": hris_res.data,
         }
         case_store.update_agent_output(case_id, "hris", hris_out)
+        case_store.emit(case_id, "agent.hris_done", {"summary": hris_res.summary, "employeeId": (hris_res.data or {}).get("employeeId")})
 
-        if any(a.get("type") == "HRIS_IDEMPOTENT_HIT" for a in (hris_res.actions or [])):
-            case_store.emit(case_id, "agent.hris_idempotent_hit", {"employeeId": (hris_res.data or {}).get("employeeId")})
+    # Workplace — skip if present
+    case = case_store.get_case(case_id) or case
+    if _has_workplace(case):
+        case_store.emit(case_id, "agent.workplace_skipped", {"msg": "Workplace already present; skipping."})
+        workplace_out = (case.get("agentOutputs") or {}).get("workplace") or {}
+    else:
+        case_store.emit(case_id, "agent.workplace_start", {"msg": "Workplace Services agent running..."})
+        w_res = await workplace_agent.run(case, notes=notes)
+        workplace_out = {
+            "summary": w_res.summary,
+            "risks": w_res.risks,
+            "actions": w_res.actions,
+            "data": w_res.data,
+        }
+        case_store.update_agent_output(case_id, "workplace", workplace_out)
+        case_store.emit(case_id, "agent.workplace_done", {"summary": w_res.summary, "risks": w_res.risks})
 
-        case_store.emit(
-            case_id,
-            "agent.hris_done",
-            {"summary": hris_res.summary, "employeeId": (hris_res.data or {}).get("employeeId")},
-        )
-
-    # Sequential: IT — skip if already present
+    # IT — skip if present
     case = case_store.get_case(case_id) or case
     if _has_it(case):
         case_store.emit(case_id, "agent.it_skipped", {"msg": "IT output already present; skipping."})
@@ -220,52 +279,59 @@ async def run_orchestrator_for_case(case_id: str, notes: str = "") -> Dict[str, 
             "data": it_res.data,
         }
         case_store.update_agent_output(case_id, "it", it_out)
-
-        sla_risks = ((it_res.data or {}).get("slaRisks")) or []
-        if sla_risks:
-            case_store.emit(case_id, "agent.it_sla_risk", {"risks": sla_risks})
-
         case_store.emit(case_id, "agent.it_done", {"summary": it_res.summary, "risks": it_res.risks})
 
-    # Conflicts (now includes IT SLA + start-date feasibility)
+    # Conflicts + decision
     case = case_store.get_case(case_id) or case
     conflicts = detect_conflicts(case, compliance_out, logistics_out, it_out)
     if conflicts:
         case_store.emit(case_id, "agent.orchestrator_conflict", {"conflicts": conflicts})
 
+    decision = _decision_for_conflicts(case, conflicts, compliance_out)
+
     overall = "ON_TRACK" if not conflicts else "AT_RISK"
-    employee_id = (hris_out.get("data") or {}).get("employeeId")
+    employee_id = ((hris_out.get("data") or {}) if isinstance(hris_out, dict) else {}).get("employeeId")
 
     plan = {
         "caseId": case_id,
         "overallStatus": overall,
         "conflicts": conflicts,
+        "decision": decision,
         "nextActions": [
             {"owner": "Candidate", "action": "Upload required documents (passport, photo, address proof, any role-specific docs)."},
-            {"owner": "HR", "action": "Review compliance and IT risks; confirm start date feasibility and resolve conflicts."},
+            {"owner": "HR", "action": "Review decision recommendation; choose expedite/delay/remote start and confirm policy."},
+            {"owner": "Workplace", "action": "Confirm seating and equipment bundle; adjust for role/work-mode changes."},
             {"owner": "IT", "action": "Track tickets and provisioning SLAs; apply mitigation if risks flagged."},
-            {"owner": "Facilities", "action": "Assign seating and building access (optional in Milestone 2)."},
         ],
         "agentSummaries": {
-            "compliance": compliance_out["summary"],
-            "logistics": logistics_out["summary"],
-            "hris": hris_out["summary"],
-            "it": it_out["summary"],
+            "compliance": compliance_out.get("summary"),
+            "logistics": logistics_out.get("summary"),
+            "hris": hris_out.get("summary") if isinstance(hris_out, dict) else None,
+            "workplace": workplace_out.get("summary") if isinstance(workplace_out, dict) else None,
+            "it": it_out.get("summary") if isinstance(it_out, dict) else None,
         },
         "day1Readiness": {
             "employeeId": employee_id,
-            "itTickets": ((it_out.get("data") or {}).get("tickets")) or [],
-            "deviceRequest": ((it_out.get("data") or {}).get("deviceRequest")) or {},
+            "itTickets": ((it_out.get("data") or {}).get("tickets")) if isinstance(it_out, dict) else [],
+            "deviceRequest": ((it_out.get("data") or {}).get("deviceRequest")) if isinstance(it_out, dict) else {},
+            "seating": ((workplace_out.get("data") or {}).get("seating")) if isinstance(workplace_out, dict) else {},
+            "workplaceEquipment": ((workplace_out.get("data") or {}).get("equipment")) if isinstance(workplace_out, dict) else {},
         },
     }
 
     case_store.update_agent_output(case_id, "orchestrator", {"plan": plan})
     case_store.emit(case_id, "agent.orchestrator_done", {"msg": "Orchestrator finished. Plan generated.", "plan": plan})
 
-    # If everything is clean, mark READY_FOR_DAY1 (DB + case_store)
-    current_status = (case_store.get_case(case_id) or {}).get("status")
-    if (not conflicts) and current_status == "ONBOARDING_IN_PROGRESS":
+    # Status must reflect outcome (demo clarity)
+    if conflicts:
+        _persist_status(case_id, "AT_RISK")
+        case_store.emit(case_id, "system.status_outcome", {"status": "AT_RISK"})
+    else:
         _persist_status(case_id, "READY_FOR_DAY1")
-        case_store.emit(case_id, "agent.orchestrator_ready_for_day1", {"msg": "Case marked READY_FOR_DAY1"})
+        case_store.emit(case_id, "system.status_outcome", {"status": "READY_FOR_DAY1"})
 
-    return {"ok": True, "plan": plan, "agentOutputs": (case_store.get_case(case_id) or {}).get("agentOutputs", {})}
+    return {
+        "ok": True,
+        "plan": plan,
+        "agentOutputs": (case_store.get_case(case_id) or {}).get("agentOutputs", {}),
+    }

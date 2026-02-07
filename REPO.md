@@ -50,7 +50,6 @@ Completed and verified end-to-end.
 
 
 
-
 Added Vite dev proxy for /api and /ws to route frontend requests to the backend cleanly. Implemented HRPage with HR
 login, case creation, case listing, and application-code generation to match the intended demo flow.
 
@@ -127,3 +126,29 @@ login, case creation, case listing, and application-code generation to match the
 - Testing: curl -s -X POST http://localhost:8000/api/case/$CASE/submit \
   -H "Content-Type: application/json" \
   -d '{"notes":"demo submit"}' | python -m json.tool
+
+### 2026-02-07 (Milestone 3: Workplace + Persistence)
+- Added: backend/app/agents/workplace_agent.py — Workplace Services agent (equipment bundle + seating assignment)
+- Added: backend/app/tools/workplace_tools.py — deterministic workplace equipment + seating plan rules
+- Added: backend/app/db/models.py — CaseState table for persisted case_store snapshot
+- Updated: backend/app/store/case_store.py — auto-persist case state on step/status/agent updates; restore from DB
+- Updated: backend/app/services/case_bridge.py — loads persisted CaseState before DB seeding
+- Updated: backend/app/services/orchestrator_service.py — runs Workplace Services, adds output to plan/day1Readiness
+- Updated: backend/app/main.py — hardened HRIS/IT endpoints and keeps WS streaming intact
+- Testing: curl -s -X POST http://localhost:8000/api/onboard/run/$CASE \
+  -H "Content-Type: application/json" \
+  -d '{"notes":"milestone3"}' | python -m json.tool
+
+[2026-02-07] Updated: backend/app/services/orchestrator_service.py — status outcome now reflects run result (READY_FOR_DAY1 / AT_RISK) and plan includes decision-ready recommendations
+
+[2026-02-07] Updated: backend/app/tools/workplace_tools.py — workplace bundle now outputs concrete deviceModel for consistent provisioning
+
+[2026-02-07] Updated: backend/app/agents/logistics_agent.py — logistics now validates Workplace-chosen device model (supply/ETA) to avoid device mismatch
+
+[2026-02-07] Updated: backend/app/agents/it_agent.py — IT provisions Workplace-selected deviceModel when present
+
+[2026-02-07] Updated: backend/app/agents/workplace_agent.py — DB-backed idempotency via workplace_assignments
+
+[2026-02-07] Updated: backend/app/db/models.py — added WorkplaceAssignment table
+
+[2026-02-07] Updated: backend/app/main.py — added POST /api/workplace/assign/{caseId} curl-first endpoint and workplace assignment index

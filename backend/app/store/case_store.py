@@ -6,9 +6,21 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from app.db.database import SessionLocal
+from app.db.models import CaseState
+
 
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _deepcopy_jsonable(obj: Any) -> Any:
+    # Avoid pulling in heavy deps; case JSON is already dict/list/str.
+    if isinstance(obj, dict):
+        return {k: _deepcopy_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_deepcopy_jsonable(v) for v in obj]
+    return obj
 
 
 @dataclass
@@ -20,12 +32,49 @@ class CaseStore:
     subscribers: Dict[str, List[asyncio.Queue]] = field(default_factory=dict)
     recent_events: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
 
-    def init_or_get_case(self, application_number: str, seed: Dict[str, Any] | None = None, case_id: str | None = None) -> Dict[str, Any]:
+    # ---------- persistence ----------
+    def persist_case(self, case_id: str) -> None:
+        """
+        Persist current in-memory case JSON to DB for resume-safe operation.
+        Safe to call often; write happens only on step/status/agent updates.
+        """
+        c = self.cases.get(case_id)
+        if not c:
+            return
+
+        payload = _deepcopy_jsonable(c)
+        db = SessionLocal()
+        try:
+            existing = db.query(CaseState).filter(CaseState.case_id == case_id).first()
+            if existing:
+                existing.state = payload
+            else:
+                db.add(CaseState(case_id=case_id, state=payload))
+            db.commit()
+        finally:
+            db.close()
+
+    def load_persisted_case(self, case_id: str) -> Optional[Dict[str, Any]]:
+        db = SessionLocal()
+        try:
+            row = db.query(CaseState).filter(CaseState.case_id == case_id).first()
+            if not row or not row.state:
+                return None
+            return row.state
+        finally:
+            db.close()
+
+    # ---------- core ----------
+    def init_or_get_case(
+        self,
+        application_number: str,
+        seed: Dict[str, Any] | None = None,
+        case_id: str | None = None,
+    ) -> Dict[str, Any]:
         if application_number in self.appnum_to_caseid:
             cid = self.appnum_to_caseid[application_number]
             existing = self.cases.get(cid)
             if existing is None:
-                # stale mapping, fall through to create
                 del self.appnum_to_caseid[application_number]
             else:
                 if case_id and case_id != cid:
@@ -45,8 +94,10 @@ class CaseStore:
                 if seed:
                     existing["seed"] = seed
                     if seed.get("candidateName"):
-                        # Only overwrite if we have a real name
                         existing["candidateName"] = seed["candidateName"]
+
+                existing["updatedAt"] = _now_iso()
+                self.persist_case(existing["caseId"])
                 return existing
 
         cid = case_id or f"CASE-{uuid.uuid4().hex[:8].upper()}"
@@ -54,7 +105,7 @@ class CaseStore:
             "caseId": cid,
             "applicationNumber": application_number,
             "candidateName": (seed or {}).get("candidateName") or "Candidate",
-            "status": "DRAFT",  # DRAFT | NEGOTIATION_PENDING | ON_HOLD_HR | SUBMITTED | READY_DAY1
+            "status": "DRAFT",  # DRAFT | NEGOTIATION_PENDING | ON_HOLD_HR | ONBOARDING_IN_PROGRESS | READY_FOR_DAY1
             "currentStepIndex": 0,
             "completedSteps": [],
             "steps": {},
@@ -68,7 +119,25 @@ class CaseStore:
         self.subscribers[cid] = []
         self.recent_events[cid] = []
         self.emit(cid, "system.case_created", {"caseId": cid, "applicationNumber": application_number})
+        self.persist_case(cid)
         return case
+
+    def set_case_direct(self, case_id: str, case_payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Load a persisted case directly into memory.
+        """
+        case_payload = case_payload or {}
+        case_payload["caseId"] = case_id
+        case_payload.setdefault("updatedAt", _now_iso())
+        self.cases[case_id] = case_payload
+
+        appnum = case_payload.get("applicationNumber")
+        if appnum:
+            self.appnum_to_caseid[appnum] = case_id
+
+        self.subscribers.setdefault(case_id, [])
+        self.recent_events.setdefault(case_id, [])
+        return case_payload
 
     def get_case(self, case_id: str) -> Optional[Dict[str, Any]]:
         return self.cases.get(case_id)
@@ -86,6 +155,7 @@ class CaseStore:
 
         c["updatedAt"] = _now_iso()
         self.emit(case_id, "ui.step_saved", {"stepKey": step_key})
+        self.persist_case(case_id)
         return c
 
     def update_agent_output(self, case_id: str, agent_name: str, output: Dict[str, Any]) -> None:
@@ -94,6 +164,7 @@ class CaseStore:
             return
         c["agentOutputs"][agent_name] = output
         c["updatedAt"] = _now_iso()
+        self.persist_case(case_id)
 
     def set_status(self, case_id: str, status: str) -> None:
         c = self.cases.get(case_id)
@@ -102,17 +173,15 @@ class CaseStore:
         c["status"] = status
         c["updatedAt"] = _now_iso()
         self.emit(case_id, "system.status_changed", {"status": status})
+        self.persist_case(case_id)
 
     def delete_case(self, case_id: str) -> bool:
-        """Delete a case and all associated data from the in-memory store."""
         c = self.cases.get(case_id)
         if not c:
             return False
-        
-        # Get application number before deleting
+
         app_num = c.get("applicationNumber")
-        
-        # Clean up all references
+
         if case_id in self.cases:
             del self.cases[case_id]
         if app_num and app_num in self.appnum_to_caseid:
@@ -121,7 +190,15 @@ class CaseStore:
             del self.subscribers[case_id]
         if case_id in self.recent_events:
             del self.recent_events[case_id]
-        
+
+        # Also remove persisted state if present
+        db = SessionLocal()
+        try:
+            db.query(CaseState).filter(CaseState.case_id == case_id).delete()
+            db.commit()
+        finally:
+            db.close()
+
         return True
 
     # ---------- events / websockets ----------
@@ -142,7 +219,6 @@ class CaseStore:
             "payload": payload,
         }
         self.recent_events.setdefault(case_id, []).append(evt)
-        # cap buffer
         if len(self.recent_events[case_id]) > 200:
             self.recent_events[case_id] = self.recent_events[case_id][-200:]
 
@@ -150,7 +226,6 @@ class CaseStore:
             try:
                 q.put_nowait(evt)
             except Exception:
-                # don't let one bad subscriber kill demo
                 pass
 
     def get_recent_events(self, case_id: str) -> List[Dict[str, Any]]:
