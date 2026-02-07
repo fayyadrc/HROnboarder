@@ -22,5 +22,5 @@ EXPOSE 10000
 # Define environment variable
 ENV PORT=10000
 
-# Run app.py when the container launches
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "10000"]
+# Run app with Render-provided port (fallback to 10000)
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
