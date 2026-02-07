@@ -11,8 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2 } from "lucide-react";
 
 const workAuthSchema = z.object({
-  workCountry: z.string().min(2, "Required"),
-  workCity: z.string().min(2, "Required"),
+  workLocation: z.string().min(2, "Required"),
   rightToWork: z.literal(true, { errorMap: () => ({ message: "You must confirm your right to work." }) }),
   visaStatus: z.string().min(1, "Select a status"),
   sponsorship: z.string().min(1, "Select yes or no"), // handling as string from Select
@@ -24,8 +23,7 @@ export function StepWorkAuth({ data, onNext, onBack, isPaused }) {
   const { register, handleSubmit, setValue, watch, formState: { errors, ifSubmitting } } = useForm({
     resolver: zodResolver(workAuthSchema),
     defaultValues: data.steps.workAuth || {
-      workCountry: "",
-      workCity: "",
+      workLocation: "",
       rightToWork: false,
       visaStatus: "",
       sponsorship: "",
@@ -57,17 +55,11 @@ export function StepWorkAuth({ data, onNext, onBack, isPaused }) {
       </CardHeader>
       <form onSubmit={handleSubmit(onSubmit)}>
         <CardContent className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-             <div className="space-y-2">
-              <Label>Work Location Country</Label>
-              <Input {...register("workCountry")} disabled={isPaused} />
-              {errors.workCountry && <p className="text-xs text-red-500">{errors.workCountry.message}</p>}
-            </div>
-             <div className="space-y-2">
-              <Label>Work Location City</Label>
-              <Input {...register("workCity")} disabled={isPaused} />
-              {errors.workCity && <p className="text-xs text-red-500">{errors.workCity.message}</p>}
-            </div>
+          <div className="space-y-2">
+            <Label>Work Location</Label>
+            <Input {...register("workLocation")} placeholder="e.g., Abu Dhabi, United Arab Emirates
+            " disabled={isPaused} />
+            {errors.workLocation && <p className="text-xs text-red-500">{errors.workLocation.message}</p>}
           </div>
 
           <div className="space-y-2">

@@ -103,6 +103,27 @@ class CaseStore:
         c["updatedAt"] = _now_iso()
         self.emit(case_id, "system.status_changed", {"status": status})
 
+    def delete_case(self, case_id: str) -> bool:
+        """Delete a case and all associated data from the in-memory store."""
+        c = self.cases.get(case_id)
+        if not c:
+            return False
+        
+        # Get application number before deleting
+        app_num = c.get("applicationNumber")
+        
+        # Clean up all references
+        if case_id in self.cases:
+            del self.cases[case_id]
+        if app_num and app_num in self.appnum_to_caseid:
+            del self.appnum_to_caseid[app_num]
+        if case_id in self.subscribers:
+            del self.subscribers[case_id]
+        if case_id in self.recent_events:
+            del self.recent_events[case_id]
+        
+        return True
+
     # ---------- events / websockets ----------
     def subscribe(self, case_id: str) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue()

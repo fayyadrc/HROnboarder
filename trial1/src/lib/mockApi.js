@@ -135,3 +135,15 @@ export const generateApplicationCode = async (caseId) => {
 export const listCases = async () => {
   return jsonFetch("/api/hr/cases", { method: "GET" });
 };
+
+export const deleteCase = async (caseId) => {
+  return jsonFetch(`/api/hr/cases/${caseId}`, { method: "DELETE" });
+};
+
+export const resumeCase = async (caseId) => {
+  return jsonFetch(`/api/hr/cases/${caseId}/resume`, { method: "POST" });
+};
+
+export const updateCase = async (caseId, payload) => {
+  return jsonFetch(`/api/hr/cases/${caseId}`, { method: "PUT", body: JSON.stringify(payload) });
+};
